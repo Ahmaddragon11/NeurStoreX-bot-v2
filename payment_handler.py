@@ -26,7 +26,32 @@ async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         payload = query.invoice_payload
         parts = payload.split("_")
         
-        if len(parts) < 3 or parts[0] != "product":
+        # التحقق من نوع الفاتورة (منتج أو تبرع)
+        if len(parts) < 2:
+            await query.answer(ok=False, error_message="❌ فاتورة غير صالحة!")
+            return
+        
+        payload_type = parts[0]
+        
+        # معالجة التبرع
+        if payload_type == "donation":
+            user_id = int(parts[1])
+            
+            # التحقق من صحة المستخدم
+            if query.from_user.id != user_id:
+                await query.answer(ok=False, error_message="❌ المستخدم غير مطابق!")
+                db.add_log('security', user_id, 'donation_fraud_attempt', 
+                          f'محاولة دفع تبرع من مستخدم مختلف')
+                return
+            
+            # كل شيء على ما يرام، قبول الدفع
+            await query.answer(ok=True)
+            db.add_log('payment', user_id, 'donation_precheckout_approved', 
+                      f'سعر: {query.total_amount}')
+            return
+        
+        # معالجة المنتج
+        if len(parts) < 3 or payload_type != "product":
             await query.answer(ok=False, error_message="❌ فاتورة غير صالحة!")
             return
         
@@ -88,15 +113,28 @@ async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج الدفع الناجح - توصيل المنتج"""
+    """معالج الدفع الناجح - توصيل المنتج أو معالجة التبرع"""
     message = update.message
     payment = message.successful_payment
     user = message.from_user
     
     try:
-        # استخراج معلومات المنتج
+        # استخراج معلومات الدفع
         payload = payment.invoice_payload
         parts = payload.split("_")
+        
+        payload_type = parts[0]
+        
+        # معالجة التبرع
+        if payload_type == "donation":
+            from donation_system import DonationSystem
+            await DonationSystem.handle_donation_payment_success(update, context)
+            return
+        
+        # معالجة المنتج
+        if payload_type != "product" or len(parts) < 3:
+            await message.reply_text("❌ فاتورة غير صالحة!")
+            return
         
         product_id = int(parts[1])
         user_id = int(parts[2])
@@ -108,7 +146,7 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
         existing_order = db.create_order(
             user_id=user_id,
             product_id=product_id,
-            product_name=payment.invoice_payload.split("_")[0] if len(parts) > 3 else "منتج",
+            product_name="منتج",
             payment_id=telegram_payment_id,
             price=payment.total_amount,
             discount_amount=0

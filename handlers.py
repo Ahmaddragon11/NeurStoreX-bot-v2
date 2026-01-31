@@ -9,9 +9,11 @@ from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 import logging
 from datetime import datetime
+import asyncio
 
 from database import Database
 from keyboards import Keyboards
+from donation_system import DonationSystem
 from utils import (
     is_admin, check_banned, check_maintenance,
     format_product_info, format_user_info,
@@ -22,6 +24,7 @@ import config
 logger = logging.getLogger(__name__)
 db = Database(config.DATABASE_NAME)
 kb = Keyboards()
+donation = DonationSystem()
 
 
 # ==================== معالجات المستخدمين ====================
@@ -421,6 +424,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=kb.back_button("my_account")
                 )
         
+        # التبرع الجديد للبوت
+        elif data == "donate_to_bot":
+            await DonationSystem.show_donation_button(update, context)
+        
+        elif data.startswith("donate_stars:"):
+            amount = int(data.split(":")[1])
+            await DonationSystem.handle_donation_amount(update, context, amount)
+        
+        elif data == "donate_custom":
+            context.user_data['donation_custom_amount'] = True
+            await query.edit_message_text(
+                "💬 <b>مبلغ مخصص</b>\n\n"
+                "أرسل المبلغ الذي تريد تبرعه بالنجوم:\n"
+                "(يجب أن يكون بين 1 و 2500 نجمة)",
+                reply_markup=kb.back_button("donate_to_bot"),
+                parse_mode='HTML'
+            )
+        
+        elif data == "donation_stats":
+            await DonationSystem.show_donation_stats(update, context)
+        
         # التبرع
         elif data == "donation_menu":
             await donation_menu_handler(query, context, user.id)
@@ -460,6 +484,25 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # التحقق من الحظر
     if not await check_banned(update, context):
+        return
+    
+    # معالجة المبلغ المخصص للتبرع
+    if context.user_data.get('donation_custom_amount'):
+        try:
+            amount = int(text)
+            if amount < 1 or amount > 2500:
+                await update.message.reply_text(
+                    "❌ المبلغ يجب أن يكون بين 1 و 2500 نجمة!\n\n"
+                    "حاول مرة أخرى أو اضغط /start"
+                )
+                return
+            
+            del context.user_data['donation_custom_amount']
+            
+            # معالجة التبرع
+            await DonationSystem.handle_donation_amount(update, context, amount)
+        except ValueError:
+            await update.message.reply_text("❌ أدخل رقماً صحيحاً!")
         return
     
     # معالجة المساهمة في حملة التبرع

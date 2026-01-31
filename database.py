@@ -238,6 +238,18 @@ class Database:
             )
         """)
         
+        # جدول التبرعات للبوت
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bot_donations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                username TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
+            )
+        """)
+        
         # إنشاء الفهارس لتحسين الأداء
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
@@ -249,6 +261,8 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_donor ON donations(donor_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_status ON donations(status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_donation_records_donation ON donation_records(donation_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bot_donations_user ON bot_donations(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bot_donations_created ON bot_donations(created_at)")
         
         conn.commit()
         logger.info("تم إنشاء جداول قاعدة البيانات بنجاح")
@@ -1420,6 +1434,77 @@ class Database:
             logger.error(f"خطأ في جلب السجل: {e}")
             return []
     
+    def add_donation_to_bot(self, user_id: int, amount: int, username: str = None) -> bool:
+        """إضافة تبرع للبوت"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO bot_donations (user_id, amount, username)
+                VALUES (?, ?, ?)
+            """, (user_id, amount, username))
+            
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"خطأ في إضافة التبرع: {e}")
+            return False
+    
+    def get_donation_stats(self) -> Dict:
+        """جلب إحصائيات التبرعات"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # إجمالي المبلغ
+            cursor.execute("SELECT SUM(amount) as total FROM bot_donations")
+            total = cursor.fetchone()['total'] or 0
+            
+            # عدد المتبرعين
+            cursor.execute("SELECT COUNT(DISTINCT user_id) as count FROM bot_donations")
+            donors = cursor.fetchone()['count'] or 0
+            
+            # متوسط المبلغ
+            cursor.execute("SELECT AVG(amount) as avg FROM bot_donations")
+            average = cursor.fetchone()['avg'] or 0
+            
+            # أكبر مبلغ
+            cursor.execute("SELECT MAX(amount) as max FROM bot_donations")
+            max_amount = cursor.fetchone()['max'] or 0
+            
+            return {
+                'total_amount': total,
+                'total_donors': donors,
+                'average_amount': int(average),
+                'max_amount': max_amount
+            }
+        except Exception as e:
+            logger.error(f"خطأ في جلب إحصائيات التبرعات: {e}")
+            return {
+                'total_amount': 0,
+                'total_donors': 0,
+                'average_amount': 0,
+                'max_amount': 0
+            }
+    
+    def get_bot_donations(self, limit: int = 10) -> List[Dict]:
+        """جلب التبرعات للبوت"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT * FROM bot_donations
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (limit,))
+            
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"خطأ في جلب التبرعات: {e}")
+            return []
+
     def close(self):
         """إغلاق الاتصال"""
         if hasattr(self.local, 'conn'):

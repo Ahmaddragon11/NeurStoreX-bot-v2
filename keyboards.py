@@ -13,6 +13,32 @@ class Keyboards:
     """فئة لإنشاء لوحات المفاتيح"""
     
     @staticmethod
+    def donation_stars_amounts() -> InlineKeyboardMarkup:
+        """أزرار اختيار مبلغ التبرع"""
+        keyboard = [
+            [
+                InlineKeyboardButton("1⭐", callback_data="donate_stars:1"),
+                InlineKeyboardButton("5⭐", callback_data="donate_stars:5"),
+                InlineKeyboardButton("10⭐", callback_data="donate_stars:10"),
+                InlineKeyboardButton("25⭐", callback_data="donate_stars:25")
+            ],
+            [
+                InlineKeyboardButton("50⭐", callback_data="donate_stars:50"),
+                InlineKeyboardButton("100⭐", callback_data="donate_stars:100"),
+                InlineKeyboardButton("250⭐", callback_data="donate_stars:250"),
+                InlineKeyboardButton("500⭐", callback_data="donate_stars:500")
+            ],
+            [
+                InlineKeyboardButton("💬 مبلغ مخصص", callback_data="donate_custom"),
+                InlineKeyboardButton("📊 إحصائيات", callback_data="donation_stats")
+            ],
+            [
+                InlineKeyboardButton("⬅️ رجوع", callback_data="start")
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
     def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
         """القائمة الرئيسية"""
         keyboard = [
@@ -40,6 +66,12 @@ class Keyboards:
                 InlineKeyboardButton(
                     f"{EMOJI['help']} المساعدة",
                     callback_data="help"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🎁 تبرع للبوت",
+                    callback_data="donate_to_bot"
                 )
             ]
         ]
