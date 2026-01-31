@@ -1,0 +1,43 @@
+# متطلبات بوت متجر تيليجرام الإلكتروني
+# Telegram Store Bot Requirements
+
+# مكتبة python-telegram-bot الإصدار الأحدث
+python-telegram-bot==21.0.1
+
+# قاعدة البيانات (مدمجة مع Python)
+# sqlite3 - built-in
+
+# للتعامل مع التواريخ والأوقات
+python-dateutil==2.8.2
+
+# للتشفير والأمان
+cryptography==42.0.5
+
+# للتعامل مع JSON
+# json - built-in
+
+# للتعامل مع CSV
+# csv - built-in
+
+# للتعامل مع الملفات
+# os - built-in
+# shutil - built-in
+
+# السجلات
+# logging - built-in
+
+# للتعامل مع الخيوط
+# threading - built-in
+
+# asyncio للعمليات اللاتزامنية
+# asyncio - built-in (Python 3.7+)
+
+# اختياري: لتحسين الأداء
+aiogram==3.4.1
+
+# اختياري: للتحليلات
+pandas==2.2.1
+
+# اختياري: لتوليد QR codes
+qrcode==7.4.2
+Pillow==10.2.0
