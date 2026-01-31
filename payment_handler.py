@@ -134,6 +134,71 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
             db.update_order_status(existing_order, 'failed', 'failed', 'المنتج غير موجود')
             return
         
+        # معالجة منتجات الرصيد - إضافة الرصيد مباشرة
+        if product['type'] == 'balance':
+            try:
+                balance_amount = int(product.get('delivery_content', 0))
+                
+                # إضافة الرصيد للمستخدم
+                if db.add_user_balance(user_id, balance_amount):
+                    # تحديث حالة الطلب
+                    db.update_order_status(
+                        existing_order,
+                        status='completed',
+                        delivery_status='delivered'
+                    )
+                    
+                    # تحديث إحصائيات الشراء
+                    db.complete_purchase(user_id, product_id, payment.total_amount)
+                    
+                    # رسالة نجاح
+                    success_message = (
+                        f"✅ {config.MESSAGES['purchase_success']}\n\n"
+                        f"💰 المنتج: {product['name']}\n"
+                        f"⭐ تم إضافة {balance_amount} نجمة إلى رصيدك!\n"
+                        f"🧾 رقم الطلب: #{existing_order}\n\n"
+                        f"شكراً لثقتك بنا! 🎉"
+                    )
+                    
+                    await message.reply_text(success_message)
+                    
+                    # إشعار المسؤول
+                    if config.NOTIFY_ADMIN_ON_PURCHASE:
+                        for admin_id in config.ADMIN_IDS:
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=admin_id,
+                                    text=(
+                                        f"🔔 عملية شراء رصيد جديدة!\n\n"
+                                        f"👤 المستخدم: {user.first_name} (@{user.username or 'بدون'})\n"
+                                        f"💰 المبلغ: {balance_amount} ⭐\n"
+                                        f"🧾 الطلب: #{existing_order}"
+                                    )
+                                )
+                            except Exception as e:
+                                logger.error(f"فشل إرسال إشعار للمسؤول: {e}")
+                    
+                    db.add_log('purchase', user_id, 'balance_purchase_completed', 
+                              f'رصيد: {balance_amount}, طلب: {existing_order}')
+                    return
+                else:
+                    await message.reply_text(
+                        f"❌ {config.MESSAGES['purchase_failed']}\n\n"
+                        "فشل إضافة الرصيد إلى حسابك.\n"
+                        "تواصل مع الدعم مع رقم الطلب: #{existing_order}"
+                    )
+                    db.update_order_status(existing_order, 'failed', 'failed', 'فشل إضافة الرصيد')
+                    return
+            except Exception as e:
+                logger.error(f"خطأ في معالجة منتج الرصيد: {e}")
+                await message.reply_text(
+                    f"❌ {config.MESSAGES['purchase_failed']}\n\n"
+                    "حدث خطأ في معالجة الرصيد.\n"
+                    "تواصل مع الدعم مع رقم الطلب: #{existing_order}"
+                )
+                db.update_order_status(existing_order, 'failed', 'failed', 'خطأ في معالجة الرصيد')
+                return
+        
         # تقليل المخزون (مع قفل لمنع race conditions)
         if product['is_limited']:
             stock_decreased = db.decrease_stock(product_id)
@@ -202,18 +267,22 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
                         # إضافة مكافأة للمُحيل
                         db.update_user_activity(referrer_id)
                         
-                        # يمكن إضافة رصيد أو مكافأة للمُحيل هنا
-                        try:
-                            await context.bot.send_message(
-                                chat_id=referrer_id,
-                                text=(
-                                    f"🎉 تهانينا!\n\n"
-                                    f"قام أحد المستخدمين الذين أحلتهم بإجراء أول عملية شراء!\n"
-                                    f"🎁 مكافأتك: {config.REFERRAL_REWARD_STARS} ⭐"
+                        # إضافة الرصيد فعلياً للمُحيل
+                        if db.add_user_balance(referrer_id, config.REFERRAL_REWARD_STARS):
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=referrer_id,
+                                    text=(
+                                        f"🎉 تهانينا!\n\n"
+                                        f"قام أحد المستخدمين الذين أحلتهم بإجراء أول عملية شراء!\n"
+                                        f"🎁 مكافأتك: {config.REFERRAL_REWARD_STARS} ⭐\n\n"
+                                        f"✨ تم إضافة الرصيد إلى حسابك!"
+                                    )
                                 )
-                            )
-                        except Exception as e:
-                            logger.error(f"فشل إرسال إشعار الإحالة: {e}")
+                            except Exception as e:
+                                logger.error(f"فشل إرسال إشعار الإحالة: {e}")
+                        else:
+                            logger.error(f"فشل إضافة رصيد الإحالة للمستخدم {referrer_id}")
             
             db.add_log('purchase', user_id, 'purchase_completed', 
                       f'منتج: {product_id}, طلب: {existing_order}')

@@ -17,15 +17,16 @@ logger = logging.getLogger(__name__)
 class Database:
     """فئة إدارة قاعدة البيانات مع حماية من التعارضات"""
     
-    _instance = None
+    _instances = {}
     _lock = threading.Lock()
     
     def __new__(cls, db_name: str):
-        if cls._instance is None:
+        # السماح بعدة مثيلات قاعدة بيانات مختلفة
+        if db_name not in cls._instances:
             with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super(Database, cls).__new__(cls)
-        return cls._instance
+                if db_name not in cls._instances:
+                    cls._instances[db_name] = super(Database, cls).__new__(cls)
+        return cls._instances[db_name]
     
     def __init__(self, db_name: str):
         if not hasattr(self, 'initialized'):
@@ -184,6 +185,59 @@ class Database:
             )
         """)
         
+        # جدول التبرعات
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS donations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                donor_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                donation_url TEXT UNIQUE,
+                description TEXT,
+                status TEXT DEFAULT 'active',
+                total_received INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (donor_id) REFERENCES users (user_id)
+            )
+        """)
+        
+        # جدول سجل التبرعات
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS donation_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                donation_id INTEGER NOT NULL,
+                contributor_id INTEGER,
+                amount INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (donation_id) REFERENCES donations (id),
+                FOREIGN KEY (contributor_id) REFERENCES users (user_id)
+            )
+        """)
+        
+        # جدول النقاط
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_points (
+                user_id INTEGER PRIMARY KEY,
+                points INTEGER DEFAULT 0,
+                total_earned INTEGER DEFAULT 0,
+                total_exchanged INTEGER DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
+            )
+        """)
+        
+        # جدول سجل تبادل النقاط
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS points_exchange_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                points_used INTEGER NOT NULL,
+                stars_received INTEGER NOT NULL,
+                exchange_rate REAL NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
+            )
+        """)
+        
         # إنشاء الفهارس لتحسين الأداء
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
@@ -192,6 +246,9 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_active ON products(is_active)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_user ON logs(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_type ON logs(type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_donor ON donations(donor_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_status ON donations(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_donation_records_donation ON donation_records(donation_id)")
         
         conn.commit()
         logger.info("تم إنشاء جداول قاعدة البيانات بنجاح")
@@ -955,6 +1012,412 @@ class Database:
             return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"خطأ في تصدير البيانات: {e}")
+            return []
+    
+    # ==================== دوال الرصيد والمحفظة ====================
+    
+    def add_user_balance(self, user_id: int, amount: int) -> bool:
+        """إضافة رصيد للمستخدم"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("BEGIN EXCLUSIVE")
+            
+            cursor.execute("""
+                UPDATE users SET balance = balance + ?
+                WHERE user_id = ?
+            """, (amount, user_id))
+            
+            success = cursor.rowcount > 0
+            conn.commit()
+            return success
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"خطأ في إضافة الرصيد: {e}")
+            return False
+    
+    def subtract_user_balance(self, user_id: int, amount: int) -> bool:
+        """خصم رصيد من المستخدم"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("BEGIN EXCLUSIVE")
+            
+            cursor.execute("""
+                UPDATE users SET balance = balance - ?
+                WHERE user_id = ? AND balance >= ?
+            """, (amount, user_id, amount))
+            
+            success = cursor.rowcount > 0
+            conn.commit()
+            return success
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"خطأ في خصم الرصيد: {e}")
+            return False
+    
+    def get_user_balance(self, user_id: int) -> int:
+        """الحصول على رصيد المستخدم"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT balance FROM users WHERE user_id = ?
+            """, (user_id,))
+            
+            row = cursor.fetchone()
+            if row:
+                return row['balance']
+            return 0
+        except Exception as e:
+            logger.error(f"خطأ في جلب الرصيد: {e}")
+            return 0
+    
+    def transfer_balance(self, from_user: int, to_user: int, amount: int) -> bool:
+        """تحويل رصيد بين مستخدمين"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("BEGIN EXCLUSIVE")
+            
+            # التحقق من أن المستخدم الأول لديه رصيد كافي
+            cursor.execute("""
+                SELECT balance FROM users WHERE user_id = ?
+            """, (from_user,))
+            
+            row = cursor.fetchone()
+            if not row or row['balance'] < amount:
+                conn.rollback()
+                return False
+            
+            # خصم من المستخدم الأول
+            cursor.execute("""
+                UPDATE users SET balance = balance - ?
+                WHERE user_id = ?
+            """, (amount, from_user))
+            
+            # إضافة للمستخدم الثاني
+            cursor.execute("""
+                UPDATE users SET balance = balance + ?
+                WHERE user_id = ?
+            """, (amount, to_user))
+            
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"خطأ في تحويل الرصيد: {e}")
+            return False
+    
+    def get_top_users_by_balance(self, limit: int = 10) -> List[Dict]:
+        """الحصول على أعلى المستخدمين برصيد"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT user_id, username, first_name, balance, total_spent
+                FROM users
+                WHERE balance > 0
+                ORDER BY balance DESC
+                LIMIT ?
+            """, (limit,))
+            
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"خطأ في جلب المستخدمين برصيد: {e}")
+            return []
+    
+    def reset_all_balances(self) -> bool:
+        """إعادة تعيين جميع الأرصدة (للاختبار/الإدارة)"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("UPDATE users SET balance = 0")
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"خطأ في إعادة تعيين الأرصدة: {e}")
+            return False
+    
+    # ==================== دوال النسخ الاحتياطي والتصدير الإضافية ====================
+    
+    def backup_database(self, backup_path: str = None) -> Optional[str]:
+        """نسخ احتياطي لقاعدة البيانات"""
+        import shutil
+        import os
+        from datetime import datetime
+        
+        try:
+            if backup_path is None:
+                backup_path = "backups"
+            
+            os.makedirs(backup_path, exist_ok=True)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_file = os.path.join(backup_path, f"backup_{timestamp}.db")
+            
+            # نسخ قاعدة البيانات
+            shutil.copy2(self.db_name, backup_file)
+            
+            logger.info(f"تم إنشاء نسخة احتياطية: {backup_file}")
+            return backup_file
+        except Exception as e:
+            logger.error(f"خطأ في النسخ الاحتياطي: {e}")
+            return None
+    
+    def vacuum_database(self) -> bool:
+        """تحسين وتنظيف قاعدة البيانات"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("VACUUM")
+            conn.commit()
+            
+            logger.info("تم تحسين قاعدة البيانات")
+            return True
+        except Exception as e:
+            logger.error(f"خطأ في تحسين البيانات: {e}")
+            return False
+    
+    # ==================== دوال التبرعات ====================
+    
+    def create_donation(self, donor_id: int, amount: int, 
+                       description: str = None) -> Optional[int]:
+        """إنشاء حملة تبرع جديدة"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            import uuid
+            donation_url = f"donate_{uuid.uuid4().hex[:10]}"
+            
+            cursor.execute("""
+                INSERT INTO donations 
+                (donor_id, amount, donation_url, description)
+                VALUES (?, ?, ?, ?)
+            """, (donor_id, amount, donation_url, description))
+            
+            conn.commit()
+            donation_id = cursor.lastrowid
+            
+            logger.info(f"تم إنشاء حملة تبرع جديدة: {donation_id}")
+            return donation_id
+        except Exception as e:
+            logger.error(f"خطأ في إنشاء حملة تبرع: {e}")
+            return None
+    
+    def get_donation(self, donation_id: int) -> Optional[Dict]:
+        """جلب بيانات حملة تبرع"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT * FROM donations WHERE id = ?", (donation_id,))
+            row = cursor.fetchone()
+            
+            if row:
+                return dict(row)
+            return None
+        except Exception as e:
+            logger.error(f"خطأ في جلب حملة التبرع: {e}")
+            return None
+    
+    def add_donation_contribution(self, donation_id: int, contributor_id: int, 
+                                 amount: int) -> bool:
+        """إضافة مساهمة لحملة تبرع"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("BEGIN EXCLUSIVE")
+            
+            # إضافة السجل
+            cursor.execute("""
+                INSERT INTO donation_records
+                (donation_id, contributor_id, amount)
+                VALUES (?, ?, ?)
+            """, (donation_id, contributor_id, amount))
+            
+            # تحديث المجموع
+            cursor.execute("""
+                UPDATE donations
+                SET total_received = total_received + ?
+                WHERE id = ?
+            """, (amount, donation_id))
+            
+            # إضافة نقاط للمساهمة (1 نقطة لكل نجمة)
+            self.add_user_points(contributor_id, amount)
+            
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"خطأ في إضافة مساهمة: {e}")
+            return False
+    
+    def get_donation_by_url(self, donation_url: str) -> Optional[Dict]:
+        """جلب حملة تبرع من الرابط"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT * FROM donations WHERE donation_url = ?", 
+                          (donation_url,))
+            row = cursor.fetchone()
+            
+            if row:
+                return dict(row)
+            return None
+        except Exception as e:
+            logger.error(f"خطأ في جلب الحملة: {e}")
+            return None
+    
+    def get_user_donations(self, user_id: int) -> List[Dict]:
+        """جلب حملات التبرع للمستخدم"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT * FROM donations
+                WHERE donor_id = ?
+                ORDER BY created_at DESC
+            """, (user_id,))
+            
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"خطأ في جلب الحملات: {e}")
+            return []
+    
+    # ==================== دوال النقاط ====================
+    
+    def add_user_points(self, user_id: int, points: int) -> bool:
+        """إضافة نقاط للمستخدم"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT OR IGNORE INTO user_points (user_id, points, total_earned)
+                VALUES (?, 0, 0)
+            """, (user_id,))
+            
+            cursor.execute("""
+                UPDATE user_points
+                SET points = points + ?,
+                    total_earned = total_earned + ?
+                WHERE user_id = ?
+            """, (points, points, user_id))
+            
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"خطأ في إضافة نقاط: {e}")
+            return False
+    
+    def get_user_points(self, user_id: int) -> Dict:
+        """جلب نقاط المستخدم"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT * FROM user_points WHERE user_id = ?
+            """, (user_id,))
+            
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            
+            # إنشاء سجل جديد إذا لم يكن موجوداً
+            cursor.execute("""
+                INSERT INTO user_points (user_id) VALUES (?)
+            """, (user_id,))
+            conn.commit()
+            
+            return {
+                'user_id': user_id,
+                'points': 0,
+                'total_earned': 0,
+                'total_exchanged': 0
+            }
+        except Exception as e:
+            logger.error(f"خطأ في جلب النقاط: {e}")
+            return {'user_id': user_id, 'points': 0, 'total_earned': 0, 'total_exchanged': 0}
+    
+    def exchange_points_to_stars(self, user_id: int, points: int, 
+                                exchange_rate: float = 0.1) -> bool:
+        """استبدال النقاط بنجوم"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("BEGIN EXCLUSIVE")
+            
+            # جلب نقاط المستخدم
+            cursor.execute("""
+                SELECT points FROM user_points WHERE user_id = ?
+            """, (user_id,))
+            
+            row = cursor.fetchone()
+            if not row or row['points'] < points:
+                conn.rollback()
+                return False
+            
+            # حساب النجوم
+            stars = int(points * exchange_rate)
+            
+            # تحديث النقاط
+            cursor.execute("""
+                UPDATE user_points
+                SET points = points - ?,
+                    total_exchanged = total_exchanged + ?
+                WHERE user_id = ?
+            """, (points, stars, user_id))
+            
+            # إضافة النجوم
+            cursor.execute("""
+                UPDATE users SET balance = balance + ?
+                WHERE user_id = ?
+            """, (stars, user_id))
+            
+            # تسجيل السجل
+            cursor.execute("""
+                INSERT INTO points_exchange_history
+                (user_id, points_used, stars_received, exchange_rate)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, points, stars, exchange_rate))
+            
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"خطأ في استبدال النقاط: {e}")
+            return False
+    
+    def get_exchange_history(self, user_id: int, limit: int = 20) -> List[Dict]:
+        """جلب سجل تبادل النقاط"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT * FROM points_exchange_history
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (user_id, limit))
+            
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"خطأ في جلب السجل: {e}")
             return []
     
     def close(self):

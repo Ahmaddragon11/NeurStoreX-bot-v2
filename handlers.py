@@ -42,13 +42,35 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_rate_limit(update, context):
         return
     
-    # معالجة رابط الإحالة
-    referrer_id = None
+    # معالجة التبرع من خلال الرابط
     if context.args and len(context.args) > 0:
+        arg = context.args[0]
+        
+        # التبرع
+        if arg.startswith("donate:"):
+            donation_url = arg.split(":")[1]
+            donation = db.get_donation_by_url(donation_url)
+            
+            if donation:
+                await update.message.reply_text(
+                    f"🎁 <b>حملة تبرع</b>\n\n"
+                    f"الوصف: {donation['description'] or 'تبرع'}\n"
+                    f"الهدف: {donation['amount']}⭐\n"
+                    f"المستقبل حالياً: {donation['total_received']}⭐\n\n"
+                    f"كم تريد أن تتبرع؟\n"
+                    f"أرسل الرقم (مثال: 10)",
+                    parse_mode='HTML'
+                )
+                context.user_data['donation_contribute'] = donation['id']
+                return
+        
+        # الإحالة العادية
         try:
-            referrer_id = int(context.args[0])
+            referrer_id = int(arg)
         except ValueError:
-            pass
+            referrer_id = None
+    else:
+        referrer_id = None
     
     # إضافة المستخدم إلى قاعدة البيانات
     db.add_user(
@@ -399,6 +421,26 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=kb.back_button("my_account")
                 )
         
+        # التبرع
+        elif data == "donation_menu":
+            await donation_menu_handler(query, context, user.id)
+        
+        elif data == "create_donation":
+            await create_donation_handler(query, context, user.id)
+        
+        elif data == "my_donations":
+            await my_donations_handler(query, context, user.id)
+        
+        # النقاط
+        elif data == "view_points":
+            await view_points_handler(query, context, user.id)
+        
+        elif data == "exchange_points":
+            await exchange_points_handler(query, context, user.id)
+        
+        elif data == "points_history":
+            await points_history_handler(query, context, user.id)
+        
         else:
             await query.answer("⚠️ وظيفة قيد التطوير")
     
@@ -418,6 +460,47 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # التحقق من الحظر
     if not await check_banned(update, context):
+        return
+    
+    # معالجة المساهمة في حملة التبرع
+    if 'donation_contribute' in context.user_data:
+        try:
+            amount = int(text)
+            donation_id = context.user_data['donation_contribute']
+            
+            if amount < 1:
+                await update.message.reply_text("❌ يجب أن تكون المساهمة 1 نجمة على الأقل!")
+                return
+            
+            # إضافة المساهمة
+            if db.add_donation_contribution(donation_id, user.id, amount):
+                await update.message.reply_text(
+                    f"✅ شكراً لتبرعك!\n\n"
+                    f"🎁 تبرعت بـ {amount}⭐\n"
+                    f"📊 اكتسبت {amount} نقطة\n\n"
+                    f"رسالة التقدير من صاحب الحملة قريباً 💝"
+                )
+                
+                # إخطار صاحب الحملة
+                donation = db.get_donation(donation_id)
+                try:
+                    await context.bot.send_message(
+                        chat_id=donation['donor_id'],
+                        text=(
+                            f"🎉 تبرع جديد!\n\n"
+                            f"👤 {user.first_name}\n"
+                            f"💰 {amount}⭐\n\n"
+                            f"شكراً للمساهمة 💝"
+                        )
+                    )
+                except:
+                    pass
+            else:
+                await update.message.reply_text("❌ فشلت المساهمة!")
+            
+            del context.user_data['donation_contribute']
+        except ValueError:
+            await update.message.reply_text("❌ أدخل رقماً صحيحاً!")
         return
     
     # معالجة إضافة منتج
@@ -458,6 +541,97 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await handle_broadcast(update, context)
         return
+    
+    # معالجة التبرع
+    if 'donation_step' in context.user_data:
+        donation_step = context.user_data.get('donation_step')
+        
+        if donation_step == 'amount':
+            try:
+                amount = int(text)
+                if amount < 10:
+                    await update.message.reply_text(
+                        "❌ يجب أن يكون المبلغ 10 نجوم على الأقل!"
+                    )
+                    return
+                
+                context.user_data['donation_amount'] = amount
+                context.user_data['donation_step'] = 'description'
+                
+                await update.message.reply_text(
+                    f"✅ المبلغ: {amount}⭐\n\n"
+                    "📝 اكتب وصف للحملة (أو اكتب 'لا' للتخطي):"
+                )
+            except ValueError:
+                await update.message.reply_text("❌ أدخل رقماً صحيحاً!")
+            return
+        
+        elif donation_step == 'description':
+            description = text if text != 'لا' else None
+            
+            # إنشاء حملة تبرع
+            donation_id = db.create_donation(
+                donor_id=user.id,
+                amount=context.user_data['donation_amount'],
+                description=description
+            )
+            
+            if donation_id:
+                donation = db.get_donation(donation_id)
+                
+                await update.message.reply_text(
+                    f"✅ تم إنشاء حملة التبرع!\n\n"
+                    f"🎁 {description or 'تبرع'}\n"
+                    f"⭐ الهدف: {donation['amount']} نجمة\n"
+                    f"🔗 الرابط للمشاركة:\n"
+                    f"<code>donate:{donation['donation_url']}</code>\n\n"
+                    f"شارك الرابط مع أصدقائك!",
+                    parse_mode='HTML'
+                )
+                
+                del context.user_data['donation_step']
+                del context.user_data['donation_amount']
+            else:
+                await update.message.reply_text("❌ فشل إنشاء الحملة!")
+            return
+    
+    # معالجة استبدال النقاط
+    if 'exchange_step' in context.user_data:
+        exchange_step = context.user_data.get('exchange_step')
+        
+        if exchange_step == 'amount':
+            try:
+                points = int(text)
+                user_points = db.get_user_points(user.id)
+                
+                if points > user_points['points']:
+                    await update.message.reply_text(
+                        f"❌ لديك {user_points['points']} نقطة فقط!"
+                    )
+                    return
+                
+                if points < 10:
+                    await update.message.reply_text(
+                        "❌ يجب أن تكون النقاط 10 على الأقل!"
+                    )
+                    return
+                
+                # استبدال النقاط
+                if db.exchange_points_to_stars(user.id, points):
+                    stars_received = int(points * 0.1)
+                    
+                    await update.message.reply_text(
+                        f"✅ تم استبدال النقاط!\n\n"
+                        f"📊 {points} نقطة → {stars_received} ⭐\n\n"
+                        f"تم إضافة النجوم إلى رصيدك!"
+                    )
+                else:
+                    await update.message.reply_text("❌ فشل الاستبدال!")
+                
+                del context.user_data['exchange_step']
+            except ValueError:
+                await update.message.reply_text("❌ أدخل رقماً صحيحاً!")
+            return
     
     # رسالة افتراضية
     await update.message.reply_text(
@@ -724,7 +898,8 @@ async def my_account_handler(query, context, user_id: int):
     
     await query.edit_message_text(
         account_text,
-        reply_markup=kb.my_account_menu()
+        reply_markup=kb.my_account_menu(),
+        parse_mode='HTML'
     )
 
 
@@ -852,6 +1027,137 @@ async def backup_database_handler(query, context):
     except Exception as e:
         logger.error(f"خطأ في النسخ الاحتياطي: {e}")
         await query.answer("❌ فشل إنشاء النسخة الاحتياطية!", show_alert=True)
+
+
+# ==================== معالجات التبرع والنقاط ====================
+
+async def donation_menu_handler(query, context, user_id: int):
+    """عرض قائمة التبرع"""
+    user = query.from_user
+    
+    await query.edit_message_text(
+        "🎁 <b>قائمة التبرع</b>\n\n"
+        "شارك الحب والكرم مع الآخرين! 💝\n\n"
+        "يمكنك إنشاء حملة تبرع وسيتمكن الآخرون من المساهمة حتى بدون البوت",
+        reply_markup=kb.donation_menu(),
+        parse_mode='HTML'
+    )
+
+
+async def create_donation_handler(query, context, user_id: int):
+    """بدء عملية إنشاء حملة تبرع"""
+    await query.edit_message_text(
+        "🎁 <b>حملة تبرع جديدة</b>\n\n"
+        "كم عدد النجوم التي تريد جمعها؟\n\n"
+        "أرسل الرقم (مثال: 100)",
+        reply_markup=kb.back_button("donation_menu"),
+        parse_mode='HTML'
+    )
+    
+    context.user_data['donation_step'] = 'amount'
+
+
+async def my_donations_handler(query, context, user_id: int):
+    """عرض حملات التبرع الخاصة بالمستخدم"""
+    donations = db.get_user_donations(user_id)
+    
+    if not donations:
+        await query.edit_message_text(
+            "😔 لم تقم بإنشاء أي حملة تبرع بعد\n\n"
+            "ابدأ حملتك الأولى الآن! 🚀",
+            reply_markup=kb.back_button("donation_menu")
+        )
+        return
+    
+    donations_text = "🎁 <b>حملاتي</b>\n\n"
+    
+    for donation in donations:
+        progress = (donation['total_received'] / donation['amount']) * 100
+        status = "✅ مكتملة" if progress >= 100 else f"⏳ {progress:.0f}%"
+        
+        donations_text += (
+            f"#{donation['id']} - {donation['description'] or 'تبرع'}\n"
+            f"   الهدف: {donation['amount']}⭐\n"
+            f"   المستقبل: {donation['total_received']}⭐\n"
+            f"   الحالة: {status}\n\n"
+        )
+    
+    await query.edit_message_text(
+        donations_text,
+        reply_markup=kb.back_button("donation_menu"),
+        parse_mode='HTML'
+    )
+
+
+async def view_points_handler(query, context, user_id: int):
+    """عرض نقاط المستخدم"""
+    user_points = db.get_user_points(user_id)
+    
+    points_text = (
+        f"📊 <b>نقاطك</b>\n\n"
+        f"النقاط الحالية: {user_points['points']} 🎯\n"
+        f"إجمالي المكتسب: {user_points['total_earned']} 📈\n"
+        f"المستبدل: {user_points['total_exchanged']} ⭐\n\n"
+        f"<i>اكسب نقاط بالتبرع والشراء!</i>"
+    )
+    
+    await query.edit_message_text(
+        points_text,
+        reply_markup=kb.points_menu(),
+        parse_mode='HTML'
+    )
+
+
+async def exchange_points_handler(query, context, user_id: int):
+    """بدء عملية استبدال النقاط"""
+    user_points = db.get_user_points(user_id)
+    
+    if user_points['points'] < 10:
+        await query.answer(
+            "❌ تحتاج إلى 10 نقاط على الأقل للاستبدال!",
+            show_alert=True
+        )
+        return
+    
+    await query.edit_message_text(
+        f"⭐ <b>استبدال النقاط</b>\n\n"
+        f"نقاطك الحالية: {user_points['points']}\n\n"
+        f"كم نقطة تريد استبدالها؟\n"
+        f"(كل 10 نقاط = 1 نجمة)\n\n"
+        f"أرسل الرقم (مثال: 10)",
+        reply_markup=kb.back_button("view_points"),
+        parse_mode='HTML'
+    )
+    
+    context.user_data['exchange_step'] = 'amount'
+
+
+async def points_history_handler(query, context, user_id: int):
+    """عرض سجل تبادل النقاط"""
+    history = db.get_exchange_history(user_id)
+    
+    if not history:
+        await query.edit_message_text(
+            "📜 <b>السجل</b>\n\n"
+            "لم تقم باستبدال أي نقاط بعد",
+            reply_markup=kb.back_button("view_points"),
+            parse_mode='HTML'
+        )
+        return
+    
+    history_text = "📜 <b>سجل الاستبدال</b>\n\n"
+    
+    for record in history:
+        history_text += (
+            f"✅ {record['points_used']} نقطة → {record['stars_received']} ⭐\n"
+            f"   📅 {record['created_at'][:10]}\n\n"
+        )
+    
+    await query.edit_message_text(
+        history_text,
+        reply_markup=kb.back_button("view_points"),
+        parse_mode='HTML'
+    )
 
 
 # استيراد asyncio

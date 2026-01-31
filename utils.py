@@ -267,20 +267,25 @@ async def send_product_to_user(context: ContextTypes.DEFAULT_TYPE,
             # إضافة رصيد للمستخدم
             balance_amount = int(product.get('delivery_content', 0))
             
-            # هنا يمكن إضافة منطق إضافة الرصيد
-            # db.add_user_balance(user_id, balance_amount)
-            
-            balance_message = (
-                f"💰 <b>{product['name']}</b>\n\n"
-                f"تم إضافة {balance_amount} ⭐ إلى رصيدك!\n\n"
-                f"✅ شكراً لشرائك!"
-            )
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=balance_message,
-                parse_mode='HTML'
-            )
-            return True
+            # إضافة الرصيد إلى قاعدة البيانات
+            if db.add_user_balance(user_id, balance_amount):
+                balance_message = (
+                    f"💰 <b>{product['name']}</b>\n\n"
+                    f"✅ تم إضافة {balance_amount} ⭐ إلى رصيدك!\n\n"
+                    f"شكراً لشرائك!"
+                )
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=balance_message,
+                    parse_mode='HTML'
+                )
+                
+                # تحديث حالة الطلب
+                db.update_order_status(order_id, 'completed', 'delivered')
+                return True
+            else:
+                logger.error(f"فشل إضافة الرصيد للمستخدم {user_id}")
+                return False
         
         # نوع غير مدعوم
         else:
@@ -398,6 +403,21 @@ async def export_to_csv(data: list, filename: str) -> str:
 
 
 def clean_temp_files():
+    """تنظيف الملفات المؤقتة"""
+    import os
+    import time
+    
+    try:
+        # تنظيف مجلد التصدير
+        if os.path.exists(config.TEMP_EXPORT_PATH):
+            for file in os.listdir(config.TEMP_EXPORT_PATH):
+                filepath = os.path.join(config.TEMP_EXPORT_PATH, file)
+                # حذف الملفات الأقدم من 24 ساعة
+                if os.path.getmtime(filepath) < time.time() - 86400:
+                    os.remove(filepath)
+                    logger.info(f"تم حذف ملف مؤقت: {filepath}")
+    except Exception as e:
+        logger.error(f"خطأ في تنظيف الملفات المؤقتة: {e}")
     """تنظيف الملفات المؤقتة"""
     try:
         if os.path.exists(config.TEMP_EXPORT_PATH):

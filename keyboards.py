@@ -595,3 +595,414 @@ class Keyboards:
         ])
         
         return InlineKeyboardMarkup(keyboard)
+    
+    # ==================== لوحات مفاتيح إضافية ====================
+    
+    @staticmethod
+    def back_button(callback: str) -> InlineKeyboardMarkup:
+        """زر رجوع بسيط"""
+        keyboard = [[
+            InlineKeyboardButton("⬅️ رجوع", callback_data=callback)
+        ]]
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
+    def admin_settings() -> InlineKeyboardMarkup:
+        """لوحة الإعدادات الإدارية"""
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "🔧 وضع الصيانة",
+                    callback_data="toggle_maintenance"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "💾 نسخة احتياطية",
+                    callback_data="backup_database"
+                ),
+                InlineKeyboardButton(
+                    "📊 تصدير",
+                    callback_data="export_data"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📢 بث جماعي",
+                    callback_data="broadcast_message"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ رجوع",
+                    callback_data="admin_panel"
+                )
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
+    def export_options() -> InlineKeyboardMarkup:
+        """خيارات التصدير"""
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "👥 المستخدمون",
+                    callback_data="export:users"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📦 المنتجات",
+                    callback_data="export:products"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🧾 الطلبات",
+                    callback_data="export:orders"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ رجوع",
+                    callback_data="admin_settings"
+                )
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
+    def stock_type() -> InlineKeyboardMarkup:
+        """خيارات نوع المخزون"""
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "♾️ غير محدود",
+                    callback_data="stock_type:unlimited"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📊 محدود",
+                    callback_data="stock_type:limited"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ رجوع",
+                    callback_data="admin_products"
+                )
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
+    def confirm_action(confirm_callback: str, cancel_callback: str) -> InlineKeyboardMarkup:
+        """لوحة تأكيد الإجراء"""
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "✅ تأكيد",
+                    callback_data=confirm_callback
+                ),
+                InlineKeyboardButton(
+                    "❌ إلغاء",
+                    callback_data=cancel_callback
+                )
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
+    def product_types() -> InlineKeyboardMarkup:
+        """أنواع المنتجات"""
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "📄 ملف",
+                    callback_data="product_type:file"
+                ),
+                InlineKeyboardButton(
+                    "🖼 صورة",
+                    callback_data="product_type:image"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📝 نص",
+                    callback_data="product_type:text"
+                ),
+                InlineKeyboardButton(
+                    "🔑 كود",
+                    callback_data="product_type:code"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "💰 رصيد",
+                    callback_data="product_type:balance"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ إلغاء",
+                    callback_data="admin_products"
+                )
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
+    def admin_products() -> InlineKeyboardMarkup:
+        """لوحة إدارة المنتجات"""
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "➕ منتج جديد",
+                    callback_data="add_product_start"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📋 قائمة المنتجات",
+                    callback_data="list_products"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ رجوع",
+                    callback_data="admin_panel"
+                )
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
+    def wallet_menu() -> InlineKeyboardMarkup:
+        """قائمة المحفظة"""
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "💰 رصيدي",
+                    callback_data="my_balance"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔄 تاريخ التحويلات",
+                    callback_data="balance_history"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🛍 شراء رصيد",
+                    callback_data="buy_balance"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ رجوع",
+                    callback_data="my_account"
+                )
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
+    def products_list(products: list, page: int = 0, prefix: str = "product") -> InlineKeyboardMarkup:
+        """قائمة المنتجات مع الصفحات"""
+        from config import PRODUCTS_PER_PAGE
+        
+        keyboard = []
+        
+        # عرض المنتجات
+        start_idx = page * PRODUCTS_PER_PAGE
+        end_idx = start_idx + PRODUCTS_PER_PAGE
+        page_products = products[start_idx:end_idx]
+        
+        for product in page_products:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"📦 {product['name']} - {product['price']}⭐",
+                    callback_data=f"{prefix}:{product['id']}"
+                )
+            ])
+        
+        # أزرار الصفحات
+        pagination_row = []
+        
+        if page > 0:
+            pagination_row.append(
+                InlineKeyboardButton("⬅️ السابق", callback_data=f"page:{prefix}:{page-1}")
+            )
+        
+        pagination_row.append(
+            InlineKeyboardButton(f"📄 {page + 1}", callback_data="noop")
+        )
+        
+        if end_idx < len(products):
+            pagination_row.append(
+                InlineKeyboardButton("➡️ التالي", callback_data=f"page:{prefix}:{page+1}")
+            )
+        
+        if pagination_row:
+            keyboard.append(pagination_row)
+        
+        # زر الرجوع
+        keyboard.append([
+            InlineKeyboardButton("⬅️ رجوع", callback_data="start")
+        ])
+        
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
+    def product_detail(product_id: int, is_admin: bool = False) -> InlineKeyboardMarkup:
+        """تفاصيل المنتج"""
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "🛒 شراء",
+                    callback_data=f"buy:{product_id}"
+                )
+            ]
+        ]
+        
+        if is_admin:
+            keyboard.append([
+                InlineKeyboardButton(
+                    "✏️ تعديل",
+                    callback_data=f"edit_product:{product_id}"
+                ),
+                InlineKeyboardButton(
+                    "🗑 حذف",
+                    callback_data=f"delete_product:{product_id}"
+                )
+            ])
+        
+        keyboard.append([
+            InlineKeyboardButton(
+                "⬅️ رجوع",
+                callback_data="browse_products"
+            )
+        ])
+        
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
+    def donation_menu() -> InlineKeyboardMarkup:
+        """قائمة التبرع"""
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "🎁 تبرع جديد",
+                    callback_data="create_donation"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📢 حملاتي",
+                    callback_data="my_donations"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ رجوع",
+                    callback_data="my_account"
+                )
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
+    def points_menu() -> InlineKeyboardMarkup:
+        """قائمة النقاط"""
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "📊 نقاطي",
+                    callback_data="view_points"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⭐ استبدال بنجوم",
+                    callback_data="exchange_points"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📜 السجل",
+                    callback_data="points_history"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ رجوع",
+                    callback_data="my_account"
+                )
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
+    def donation_confirm(donation_id: int) -> InlineKeyboardMarkup:
+        """تأكيد التبرع"""
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "✅ تأكيد",
+                    callback_data=f"confirm_donation:{donation_id}"
+                ),
+                InlineKeyboardButton(
+                    "❌ إلغاء",
+                    callback_data="my_donations"
+                )
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
+    def my_account_menu() -> InlineKeyboardMarkup:
+        """قائمة الحساب الشخصي"""
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    f"{EMOJI['account']} معلومات",
+                    callback_data="account_info"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "💰 المحفظة",
+                    callback_data="my_balance"
+                ),
+                InlineKeyboardButton(
+                    "📊 النقاط",
+                    callback_data="view_points"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🎁 التبرع",
+                    callback_data="donation_menu"
+                ),
+                InlineKeyboardButton(
+                    "🔗 الإحالة",
+                    callback_data="my_referral"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⭐ احصائياتي",
+                    callback_data="my_stats"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ رجوع",
+                    callback_data="start"
+                )
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
