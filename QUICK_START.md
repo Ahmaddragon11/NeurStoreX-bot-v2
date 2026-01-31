@@ -13,7 +13,7 @@
 
 مثال:
 ```
-7066041694:AAHxaBcDeFgHiJkLmNoPqRsTuVwXyZ123456
+YOUR_BOT_TOKEN_HERE
 ```
 
 ### 2️⃣ معرفة معرفك على تيليجرام
@@ -56,7 +56,7 @@ pip3 install -r requirements.txt
 
 ```python
 # السطر 8: ضع التوكن الذي حصلت عليه
-BOT_TOKEN = "7066041694:AAHxaBcDeFgHiJkLmNoPqRsTuVwXyZ123456"
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 
 # السطر 11: ضع معرفك الرقمي
 ADMIN_IDS = [123456789]

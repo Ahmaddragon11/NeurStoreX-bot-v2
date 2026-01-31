@@ -21,7 +21,11 @@ class Database:
     _lock = threading.Lock()
     
     def __new__(cls, db_name: str):
-        # السماح بعدة مثيلات قاعدة بيانات مختلفة
+        # لا نستخدم التخزين المؤقت لمثيلات in-memory لتجنب مشاركة الحالة بين الاختبارات
+        if db_name == ":memory:":
+            return super(Database, cls).__new__(cls)
+
+        # السماح بعدة مثيلات قاعدة بيانات مختلفة باستثناء in-memory
         if db_name not in cls._instances:
             with cls._lock:
                 if db_name not in cls._instances:
@@ -366,10 +370,21 @@ class Database:
             cursor = conn.cursor()
             
             query = "SELECT * FROM users ORDER BY join_date DESC"
-            if limit:
-                query += f" LIMIT {limit} OFFSET {offset}"
-            
-            cursor.execute(query)
+            params: List = []
+            if limit is not None:
+                try:
+                    l = int(limit)
+                    o = int(offset)
+                    if l < 0:
+                        l = 0
+                    if o < 0:
+                        o = 0
+                except Exception:
+                    l, o = 0, 0
+                query += " LIMIT ? OFFSET ?"
+                params.extend([l, o])
+
+            cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"خطأ في جلب المستخدمين: {e}")
@@ -435,17 +450,27 @@ class Database:
             cursor = conn.cursor()
             
             query = "SELECT * FROM products WHERE is_active = 1"
-            params = []
-            
+            params: List = []
+
             if category:
                 query += " AND category = ?"
                 params.append(category)
-            
+
             query += " ORDER BY created_at DESC"
-            
-            if limit:
-                query += f" LIMIT {limit} OFFSET {offset}"
-            
+
+            if limit is not None:
+                try:
+                    l = int(limit)
+                    o = int(offset)
+                    if l < 0:
+                        l = 0
+                    if o < 0:
+                        o = 0
+                except Exception:
+                    l, o = 0, 0
+                query += " LIMIT ? OFFSET ?"
+                params.extend([l, o])
+
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
@@ -663,6 +688,21 @@ class Database:
         except Exception as e:
             logger.error(f"خطأ في جلب الطلبات: {e}")
             return []
+
+    def get_order(self, order_id: int) -> Optional[Dict]:
+        """الحصول على طلب بعينه"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT * FROM orders WHERE id = ?", (order_id,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return None
+        except Exception as e:
+            logger.error(f"خطأ في جلب الطلب: {e}")
+            return None
     
     def get_all_orders(self, limit: int = 50) -> List[Dict]:
         """الحصول على جميع الطلبات"""

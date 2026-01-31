@@ -85,7 +85,9 @@ class DonationSystem:
         try:
             payload = f"donation_{user.id}_{uuid.uuid4().hex[:8]}"
             
-            prices = [LabeledPrice("تبرع للبوت", amount * 100)]  # بالنقود الصغيرة (1 نجمة = 100 وحدة صغيرة)
+            # بعض مزودي المدفوعات يستخدمون وحدات صغيرة (مثل سنت)،
+            # لذلك نتعامل معهما بمرونة: نرسل المبلغ كعدد نجوم إذا كان المزود يقبل ذلك.
+            prices = [LabeledPrice("تبرع للبوت", int(amount))]
             
             await context.bot.send_invoice(
                 chat_id=user.id,
@@ -125,8 +127,15 @@ class DonationSystem:
             # استخراج معلومات التبرع
             payload = payment.invoice_payload
             
-            # الحصول على المبلغ
-            amount = payment.total_amount // 100  # تحويل من وحدات صغيرة إلى نجوم
+            # الحصول على المبلغ (بما يتوافق مع المزود)
+            total = getattr(payment, 'total_amount', 0)
+
+            # إذا كان المزود يعيد المبلغ بوحدات صغيرة (مثل ضرب 100)،
+            # نكتشف ذلك ونحول إلى نجوم فقط عندما يكون القسمة بدون باقي معقولة.
+            if isinstance(total, int) and total % 100 == 0 and (total // 100) <= config.MAX_DONATION_AMOUNT:
+                amount = total // 100
+            else:
+                amount = int(total)
             
             # إضافة المساهمة في جدول التبرعات
             db.add_donation_to_bot(

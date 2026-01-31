@@ -184,6 +184,93 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "📦 إدارة المنتجات\n\nاختر الإجراء:",
                 reply_markup=kb.admin_products()
             )
+
+        # فتح قائمة تعديل منتج واحد
+        elif data.startswith("edit_product:"):
+            if not is_admin(user.id):
+                await query.answer("⛔ غير مصرح لك!", show_alert=True)
+                return
+
+            product_id = int(data.split(":")[1])
+            await query.edit_message_text(
+                "✏️ اختر الحقل الذي تريد تعديله:",
+                reply_markup=kb.edit_product_menu(product_id)
+            )
+
+        # بدء خطوات تعديل الحقول
+        elif data.startswith("edit_product_name:"):
+            product_id = int(data.split(":")[1])
+            context.user_data['editing_product'] = {'product_id': product_id, 'step': 'name'}
+            await query.edit_message_text("✏️ أرسل الاسم الجديد:", reply_markup=kb.back_button(f"product:{product_id}"))
+
+        elif data.startswith("edit_product_desc:"):
+            product_id = int(data.split(":")[1])
+            context.user_data['editing_product'] = {'product_id': product_id, 'step': 'description'}
+            await query.edit_message_text("📝 أرسل الوصف الجديد:", reply_markup=kb.back_button(f"product:{product_id}"))
+
+        elif data.startswith("edit_product_price:"):
+            product_id = int(data.split(":")[1])
+            context.user_data['editing_product'] = {'product_id': product_id, 'step': 'price'}
+            await query.edit_message_text(f"⭐ أرسل السعر الجديد (بين {config.MIN_PRODUCT_PRICE} و {config.MAX_PRODUCT_PRICE}):", reply_markup=kb.back_button(f"product:{product_id}"))
+
+        elif data.startswith("edit_product_stock:"):
+            product_id = int(data.split(":")[1])
+            context.user_data['editing_product'] = {'product_id': product_id, 'step': 'stock'}
+            await query.edit_message_text("🔢 أرسل كمية المخزون الجديدة (استخدم -1 لغير محدود):", reply_markup=kb.back_button(f"product:{product_id}"))
+
+        elif data.startswith("edit_product_discount:"):
+            product_id = int(data.split(":")[1])
+            context.user_data['editing_product'] = {'product_id': product_id, 'step': 'discount'}
+            await query.edit_message_text("🎁 أرسل نسبة الخصم الجديدة (0-100):", reply_markup=kb.back_button(f"product:{product_id}"))
+
+        elif data.startswith("edit_product_content:"):
+            product_id = int(data.split(":")[1])
+            context.user_data['editing_product'] = {'product_id': product_id, 'step': 'content'}
+            await query.edit_message_text("📄 أرسل المحتوى الجديد (نص أو ملف):", reply_markup=kb.back_button(f"product:{product_id}"))
+
+        # قائمة تعديل المنتجات
+        elif data == "edit_product_list":
+            if not is_admin(user.id):
+                await query.answer("⛔ غير مصرح لك!", show_alert=True)
+                return
+
+            products = db.get_active_products()
+            if not products:
+                await query.edit_message_text("😔 لا توجد منتجات", reply_markup=kb.admin_products())
+                return
+
+            await query.edit_message_text(
+                "✏️ اختر المنتج لتعديله:",
+                reply_markup=kb.products_list(products, 0, "edit_product")
+            )
+
+        # قائمة حذف المنتجات
+        elif data == "delete_product_list":
+            if not is_admin(user.id):
+                await query.answer("⛔ غير مصرح لك!", show_alert=True)
+                return
+
+            products = db.get_active_products()
+            if not products:
+                await query.edit_message_text("😔 لا توجد منتجات", reply_markup=kb.admin_products())
+                return
+
+            await query.edit_message_text(
+                "🗑 اختر المنتج للحذف:",
+                reply_markup=kb.products_list(products, 0, "delete_product")
+            )
+
+        # عرض جميع المنتجات (قائمة عامة)
+        elif data == "view_all_products" or data == "list_products":
+            products = db.get_active_products()
+            if not products:
+                await query.edit_message_text(config.MESSAGES['no_products'], reply_markup=kb.back_button("start"))
+                return
+
+            await query.edit_message_text(
+                f"🛍 المنتجات المتاحة ({len(products)})\n\nاختر المنتج:",
+                reply_markup=kb.products_list(products, 0, "product")
+            )
         
         # إضافة منتج
         elif data == "add_product_start":
@@ -230,6 +317,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             await query.edit_message_text(
                 "⚙️ الإعدادات\n\nاختر ما تريد تعديله:",
+                reply_markup=kb.admin_settings()
+            )
+
+        elif data == "manage_discounts":
+            if not is_admin(user.id):
+                await query.answer("⛔ غير مصرح لك!", show_alert=True)
+                return
+
+            await query.edit_message_text("🎁 إدارة الخصومات (قيد التطوير)", reply_markup=kb.admin_settings())
+
+        elif data == "referral_settings":
+            if not is_admin(user.id):
+                await query.answer("⛔ غير مصرح لك!", show_alert=True)
+                return
+
+            await query.edit_message_text(
+                f"🔗 إعدادات الإحالة\n\nمكافأة الإحالة الحالية: {config.REFERRAL_REWARD_STARS} ⭐",
                 reply_markup=kb.admin_settings()
             )
         
@@ -316,6 +420,51 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data.startswith("unban_user:"):
             from admin_handlers import admin_handler
             await admin_handler.handle_unban_user(update, context)
+
+        # إضافة رصيد لمستخدم (من قبل المسؤول)
+        elif data.startswith("add_balance:"):
+            if not is_admin(user.id):
+                await query.answer("⛔ غير مصرح لك!", show_alert=True)
+                return
+
+            target_id = int(data.split(":")[1])
+            context.user_data['adding_balance'] = {'target': target_id}
+            await query.edit_message_text(f"💰 أرسل قيمة الرصيد لإضافتها للمستخدم {target_id}:", reply_markup=kb.back_button('admin_users'))
+
+        # عرض سجلات مستخدم
+        elif data.startswith("user_logs:"):
+            if not is_admin(user.id):
+                await query.answer("⛔ غير مصرح لك!", show_alert=True)
+                return
+
+            target_id = int(data.split(":")[1])
+            logs = db.get_logs(user_id=target_id, limit=50)
+            if not logs:
+                await query.edit_message_text("❌ لا توجد سجلات لهذا المستخدم", reply_markup=kb.back_button('admin_users'))
+                return
+
+            text = f"🔒 سجلات المستخدم {target_id}:\n\n"
+            for l in logs:
+                text += f"{l['timestamp'][:16]} - {l['action']} - {l.get('details','')}\n"
+
+            await query.edit_message_text(text, reply_markup=kb.back_button('admin_users'))
+
+        # عرض إيصال الطلب
+        elif data.startswith("receipt:"):
+            order_id = int(data.split(":")[1])
+            order = db.get_order(order_id)
+            if not order:
+                await query.answer("❌ لم يتم العثور على الطلب!", show_alert=True)
+                return
+
+            await query.edit_message_text(
+                f"🧾 إيصال الطلب #{order_id}\n\n"
+                f"المنتج: {order.get('product_name')}\n"
+                f"السعر: {order.get('final_price')} ⭐\n"
+                f"الحالة: {order.get('status')}\n"
+                f"الوقت: {order.get('created_at')}\n",
+                reply_markup=kb.back_button('my_orders')
+            )
         
         # حذف منتج
         elif data.startswith("delete_product:"):
@@ -383,6 +532,26 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     balance_text,
                     reply_markup=kb.back_button("my_account")
                 )
+
+        elif data == "buy_balance":
+            await query.edit_message_text(
+                "💳 شراء رصيد\n\nأرسل عدد النجوم التي تريد شراؤها:",
+                reply_markup=kb.back_button("my_account")
+            )
+            context.user_data['buying_balance'] = True
+
+        elif data == "balance_history":
+            user_data = db.get_user(user.id)
+            if not user_data:
+                await query.answer("❌ خطأ في جلب البيانات!", show_alert=True)
+                return
+
+            history_text = (
+                f"📜 تاريخ الحساب\n\n"
+                f"إجمالي المصروفات: {user_data.get('total_spent',0)} ⭐\n"
+                f"عدد المشتريات: {user_data.get('total_purchases',0)}\n"
+            )
+            await query.edit_message_text(history_text, reply_markup=kb.back_button('my_account'))
         
         # رابط الإحالة
         elif data == "my_referral":
@@ -405,6 +574,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=kb.back_button("my_account"),
                 parse_mode='Markdown'
             )
+
+        # معلومات الحساب (تفاصيل)
+        elif data == "account_info":
+            user_data = db.get_user(user.id)
+            if not user_data:
+                await query.answer("❌ خطأ في جلب البيانات!", show_alert=True)
+                return
+
+            info = (
+                f"👤 معلومات الحساب\n\n"
+                f"الاسم: {user_data.get('first_name', '')} {user_data.get('last_name', '')}\n"
+                f"المعرف: @{user_data.get('username') or 'بدون'}\n"
+                f"ID: {user_data.get('user_id')}\n"
+                f"الانضمام: {user_data.get('join_date')[:10]}\n"
+            )
+
+            await query.edit_message_text(info, reply_markup=kb.back_button("my_account"))
         
         # إحصائياتي
         elif data == "my_stats":
@@ -444,6 +630,26 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         elif data == "donation_stats":
             await DonationSystem.show_donation_stats(update, context)
+
+        # تأكيد تبرع (زر في لوحة التأكيد)
+        elif data.startswith("confirm_donation:"):
+            donation_id = int(data.split(":")[1])
+            donation_obj = db.get_donation(donation_id)
+            if not donation_obj:
+                await query.answer("❌ حملة التبرع غير موجودة!", show_alert=True)
+                return
+
+            # علامة بسيطة: إرسال رابط الحملة أو رسالة تأكيد للمالك
+            await query.answer("✅ تم تأكيد الحملة!", show_alert=True)
+            try:
+                await context.bot.send_message(
+                    chat_id=donation_obj['donor_id'],
+                    text=(f"🎉 تم تأكيد حملتك (#{donation_id})\n"
+                          f"الوصف: {donation_obj.get('description') or 'لا وصف'}\n"
+                          f"الهدف: {donation_obj.get('amount')}⭐")
+                )
+            except:
+                pass
         
         # التبرع
         elif data == "donation_menu":
@@ -545,6 +751,49 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             await update.message.reply_text("❌ أدخل رقماً صحيحاً!")
         return
+
+    # معالجة إضافة رصيد (من قبل المسؤول)
+    if 'adding_balance' in context.user_data:
+        if not is_admin(user.id):
+            return
+
+        try:
+            amount = int(text)
+            target = context.user_data['adding_balance']['target']
+            if amount <= 0:
+                await update.message.reply_text("❌ أدخل قيمة صحيحة أكبر من 0")
+                return
+
+            if db.add_user_balance(target, amount):
+                await update.message.reply_text(f"✅ تم إضافة {amount} ⭐ للمستخدم {target}")
+                db.add_log('admin', user.id, 'add_balance', f'أضف {amount} ل {target}')
+            else:
+                await update.message.reply_text("❌ فشل إضافة الرصيد!")
+
+            del context.user_data['adding_balance']
+        except ValueError:
+            await update.message.reply_text("❌ الرجاء إدخال رقم صحيح")
+        return
+
+    # شراء رصيد (بسيط - دون عملية دفع حقيقية، لإصدار تجريبي)
+    if 'buying_balance' in context.user_data:
+        try:
+            amount = int(text)
+            if amount <= 0:
+                await update.message.reply_text("❌ أدخل قيمة صحيحة أكبر من 0")
+                return
+
+            # نضيف الرصيد فوراً (تجريبي)
+            if db.add_user_balance(user.id, amount):
+                await update.message.reply_text(f"✅ تمت إضافة {amount} ⭐ إلى رصيدك!")
+                db.add_log('purchase', user.id, 'buy_balance', f'قيمة: {amount}')
+            else:
+                await update.message.reply_text("❌ فشل إضافة الرصيد!")
+
+            del context.user_data['buying_balance']
+        except ValueError:
+            await update.message.reply_text("❌ الرجاء إدخال رقم صحيح")
+        return
     
     # معالجة إضافة منتج
     if 'adding_product' in context.user_data:
@@ -573,7 +822,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'editing_product' in context.user_data:
         if not is_admin(user.id):
             return
-        
         await handle_edit_product_step(update, context)
         return
     
@@ -740,8 +988,80 @@ async def handle_add_product_step(update: Update, context: ContextTypes.DEFAULT_
 
 async def handle_edit_product_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالجة خطوات تعديل منتج"""
-    # سيتم تنفيذها لاحقاً
-    pass
+    user = update.effective_user
+    if not is_admin(user.id):
+        return
+
+    editing = context.user_data.get('editing_product', {})
+    product_id = editing.get('product_id')
+    step = editing.get('step')
+
+    if not product_id or not step:
+        return
+
+    try:
+        text = update.message.text
+
+        if step == 'name':
+            db.update_product(product_id, name=text)
+            await update.message.reply_text(f"✅ تم تحديث الاسم: {text}", reply_markup=kb.product_detail(product_id, is_admin=True))
+
+        elif step == 'description':
+            db.update_product(product_id, description=text)
+            await update.message.reply_text("✅ تم تحديث الوصف", reply_markup=kb.product_detail(product_id, is_admin=True))
+
+        elif step == 'price':
+            try:
+                price = int(text)
+                if price < config.MIN_PRODUCT_PRICE or price > config.MAX_PRODUCT_PRICE:
+                    await update.message.reply_text(f"❌ السعر يجب أن يكون بين {config.MIN_PRODUCT_PRICE} و {config.MAX_PRODUCT_PRICE} نجمة!")
+                    return
+                db.update_product(product_id, price=price)
+                await update.message.reply_text(f"✅ تم تحديث السعر: {price} ⭐", reply_markup=kb.product_detail(product_id, is_admin=True))
+            except ValueError:
+                await update.message.reply_text("❌ أدخل رقماً صحيحاً للسعر!")
+
+        elif step == 'stock':
+            try:
+                stock = int(text)
+                db.update_product(product_id, stock=stock, is_limited=1 if stock >= 0 else 0)
+                await update.message.reply_text(f"✅ تم تحديث المخزون: {stock}", reply_markup=kb.product_detail(product_id, is_admin=True))
+            except ValueError:
+                await update.message.reply_text("❌ أدخل رقماً صحيحاً للمخزون!")
+
+        elif step == 'discount':
+            try:
+                discount = int(text)
+                if discount < 0 or discount > 100:
+                    await update.message.reply_text("❌ نسبة الخصم يجب أن تكون بين 0 و 100")
+                    return
+                db.update_product(product_id, discount_percentage=discount)
+                await update.message.reply_text(f"✅ تم تحديث الخصم: {discount}%", reply_markup=kb.product_detail(product_id, is_admin=True))
+            except ValueError:
+                await update.message.reply_text("❌ أدخل رقماً صحيحاً للخصم!")
+
+        elif step == 'content':
+            # نأخذ المحتوى كنص عام أو file_id إذا أرسل ملف
+            content = None
+            if update.message.document:
+                content = update.message.document.file_id
+            elif update.message.photo:
+                content = update.message.photo[-1].file_id
+            else:
+                content = text
+
+            db.update_product(product_id, delivery_content=content)
+            await update.message.reply_text("✅ تم تحديث المحتوى", reply_markup=kb.product_detail(product_id, is_admin=True))
+
+        # إنهاء وضع التحرير
+        if 'editing_product' in context.user_data:
+            del context.user_data['editing_product']
+
+        db.add_log('admin', user.id, 'edit_product', f'منتج: {product_id}, خطوة: {step}')
+
+    except Exception as e:
+        logger.error(f"خطأ في تعديل المنتج: {e}")
+        await update.message.reply_text("❌ حدث خطأ أثناء تعديل المنتج")
 
 
 async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
