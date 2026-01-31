@@ -31,6 +31,7 @@ class DonationSystem:
         from keyboards import Keyboards
         kb = Keyboards()
         
+        # Generic bot donation (no campaign) shows default amounts
         if hasattr(update, 'callback_query') and update.callback_query:
             await update.callback_query.edit_message_text(
                 "🎁 <b>ساعد في تطوير البوت</b>\n\n"
@@ -52,6 +53,44 @@ class DonationSystem:
                 "<b>كم تريد أن تتبرع بنجمة؟</b>",
                 reply_markup=kb.donation_stars_amounts(),
                 parse_mode=ParseMode.HTML
+            )
+
+    @staticmethod
+    async def show_campaign_donation(update: Update, context: ContextTypes.DEFAULT_TYPE, donation: dict):
+        """Show donation buttons for a specific campaign (donation has donation_options)"""
+        from keyboards import Keyboards
+        kb = Keyboards()
+
+        # build keyboard from donation_options if present
+        import json
+        options = []
+        try:
+            if donation.get('donation_options'):
+                options = json.loads(donation['donation_options'])
+        except Exception:
+            options = []
+
+        keyboard = []
+        # create buttons for each option
+        for amt in options:
+            keyboard.append([InlineKeyboardButton(f"{amt}⭐", callback_data=f"donate_campaign:{donation['donation_url']}:{amt}")])
+
+        # custom amount and stats/back
+        keyboard.append([
+            InlineKeyboardButton("💬 مبلغ مخصص", callback_data=f"donate_campaign_custom:{donation['donation_url']}"),
+            InlineKeyboardButton("📊 إحصائيات", callback_data="donation_stats")
+        ])
+        keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="start")])
+
+        if hasattr(update, 'callback_query') and update.callback_query:
+            await update.callback_query.edit_message_text(
+                f"🎁 حملة تبرع: {donation.get('description') or 'تبرع'}\nالهدف: {donation.get('amount')}⭐\n\nاختر المبلغ:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await update.message.reply_text(
+                f"🎁 حملة تبرع: {donation.get('description') or 'تبرع'}\nالهدف: {donation.get('amount')}⭐\n\nاختر المبلغ:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
     
     @staticmethod
@@ -83,21 +122,39 @@ class DonationSystem:
         
         # إنشاء رابط دفع
         try:
-            payload = f"donation_{user.id}_{uuid.uuid4().hex[:8]}"
+            # payload formats:
+            # bot donation (no campaign): donation_{user_id}_{uuid}
+            # campaign donation: donation_c_{donation_id}_{user_id}_{uuid}
+            if context.user_data.get('donation_contribute'):
+                donation_id = context.user_data.get('donation_contribute')
+                payload = f"donation_c_{donation_id}_{user.id}_{uuid.uuid4().hex[:8]}"
+            else:
+                payload = f"donation_{user.id}_{uuid.uuid4().hex[:8]}"
             
             # بعض مزودي المدفوعات يستخدمون وحدات صغيرة (مثل سنت)،
             # لذلك نتعامل معهما بمرونة: نرسل المبلغ كعدد نجوم إذا كان المزود يقبل ذلك.
             prices = [LabeledPrice("تبرع للبوت", int(amount))]
             
-            await context.bot.send_invoice(
-                chat_id=user.id,
-                title="🎁 تبرع للبوت",
-                description=f"شكراً لدعمك للبوت! تبرع بـ {amount}⭐",
-                payload=payload,
-                provider_token="",  # للدفع بالنجوم
-                currency="XTR",  # عملة النجوم
-                prices=prices
-            )
+            if config.PAYMENT_PROVIDER_TOKEN:
+                await context.bot.send_invoice(
+                    chat_id=user.id,
+                    title="🎁 تبرع للبوت",
+                    description=f"شكراً لدعمك للبوت! تبرع بـ {amount}⭐",
+                    payload=payload,
+                    provider_token=config.PAYMENT_PROVIDER_TOKEN,
+                    currency="XTR",
+                    prices=prices
+                )
+            else:
+                # Provider token not configured — inform user and offer manual instruction
+                target = update.callback_query if hasattr(update, 'callback_query') and update.callback_query else update.message
+                try:
+                    await target.reply_text(
+                        "💳 نظام المدفوعات غير مفعل حالياً.\n\n"
+                        f"تواصل مع الدعم للمساعدة: {config.SUPPORT_USERNAME}"
+                    )
+                except Exception:
+                    pass
             
             # تسجيل المحاولة
             db.add_log('donation', user.id, 'donation_initiated', f'محاولة تبرع: {amount} نجمة')

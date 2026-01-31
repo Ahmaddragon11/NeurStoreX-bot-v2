@@ -9,6 +9,9 @@ from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 import logging
 from datetime import datetime
+import os
+import csv
+import time
 import asyncio
 
 from database import Database
@@ -55,15 +58,10 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             donation = db.get_donation_by_url(donation_url)
             
             if donation:
-                await update.message.reply_text(
-                    f"🎁 <b>حملة تبرع</b>\n\n"
-                    f"الوصف: {donation['description'] or 'تبرع'}\n"
-                    f"الهدف: {donation['amount']}⭐\n"
-                    f"المستقبل حالياً: {donation['total_received']}⭐\n\n"
-                    f"كم تريد أن تتبرع؟\n"
-                    f"أرسل الرقم (مثال: 10)",
-                    parse_mode='HTML'
-                )
+                # show preset buttons if donation has options
+                from donation_system import DonationSystem
+                await DonationSystem.show_campaign_donation(update, context, donation)
+                # mark user as contributing to this donation (by id)
                 context.user_data['donation_contribute'] = donation['id']
                 return
         
@@ -517,6 +515,113 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.answer(f"تم تغيير حالة المنتج إلى: {status_text}")
                 
                 await show_product_handler(query, context, product_id, is_admin=True)
+
+        # بدء استيراد CSV للمنتجات
+        elif data == "import_products_csv":
+            if not is_admin(user.id):
+                await query.answer("⛔ غير مصرح لك!", show_alert=True)
+                return
+
+            context.user_data['importing_products'] = True
+            await query.edit_message_text(
+                "📥 أرسل ملف CSV يحتوي على الأعمدة: id (اختياري)،name,description,price,type,content,stock,is_limited,category\n\n" \
+                "سيتم إضافة المنتجات أو تحديثها وفقاً لمحتوى الملف.",
+                reply_markup=kb.back_button('admin_products')
+            )
+
+        # بدء تعيين خصم للجميع
+        elif data == "bulk_discount":
+            if not is_admin(user.id):
+                await query.answer("⛔ غير مصرح لك!", show_alert=True)
+                return
+
+            context.user_data['bulk_discount'] = True
+            await query.edit_message_text(
+                "🔁 أرسل نسبة الخصم (0-100) التي تريد تطبيقها على جميع المنتجات:",
+                reply_markup=kb.back_button('admin_products')
+            )
+        
+        # خصم سريع (مثلاً 10% أو إزالة الخصم)
+        elif data.startswith("quick_discount:"):
+            if not is_admin(user.id):
+                await query.answer("⛔ غير مصرح لك!", show_alert=True)
+                return
+
+            parts = data.split(":")
+            if len(parts) >= 3:
+                product_id = int(parts[1])
+                try:
+                    percent = int(parts[2])
+                except ValueError:
+                    percent = 0
+
+                if db.update_product(product_id, discount_percentage=percent):
+                    db.add_log('admin', user.id, 'quick_discount', f'منتج: {product_id}, نسبة: {percent}')
+                    await query.answer(f"✅ تم تعيين خصم {percent}% للمنتج")
+                else:
+                    await query.answer("❌ فشل تحديث الخصم!", show_alert=True)
+
+                await show_product_handler(query, context, product_id, is_admin=True)
+
+        # تغيير فئة المنتج - نطلب من المدير إرسال اسم الفئة الجديد
+        elif data.startswith("change_category:"):
+            if not is_admin(user.id):
+                await query.answer("⛔ غير مصرح لك!", show_alert=True)
+                return
+
+            product_id = int(data.split(":")[1])
+            # عرض اختيار من الفئات المعرفة
+            await query.edit_message_text(
+                "🏷️ اختر فئة للمنتج:",
+                reply_markup=kb.category_select(product_id)
+            )
+
+        # اختيار فئة محددة من القائمة
+        elif data.startswith("set_category:"):
+            if not is_admin(user.id):
+                await query.answer("⛔ غير مصرح لك!", show_alert=True)
+                return
+
+            parts = data.split(":")
+            if len(parts) >= 3:
+                product_id = int(parts[1])
+                category_key = parts[2]
+                # نستخدم الاسم (key) كقيمة الفئة
+                # احفظ التسمية (label) بدلاً من المفتاح لتسهيل العرض
+                category_label = config.PRODUCT_TYPES.get(category_key, category_key)
+                if db.update_product(product_id, category=category_label):
+                    db.add_log('admin', user.id, 'change_category', f'منتج: {product_id}, فئة: {category_label}')
+                    await query.answer(f"✅ تم تغيير الفئة إلى: {category_label}")
+                else:
+                    await query.answer("❌ فشل تغيير الفئة!", show_alert=True)
+
+                await show_product_handler(query, context, product_id, is_admin=True)
+
+        # فئة مخصصة - طلب نص
+        elif data.startswith("set_category_custom:"):
+            if not is_admin(user.id):
+                await query.answer("⛔ غير مصرح لك!", show_alert=True)
+                return
+
+            product_id = int(data.split(":")[1])
+            context.user_data['changing_category'] = {'product_id': product_id}
+            await query.edit_message_text(
+                "🏷️ أرسل اسم الفئة الجديدة (نصي):",
+                reply_markup=kb.back_button(f"product:{product_id}")
+            )
+
+        # خصم مخصص: بدء الإدخال
+        elif data.startswith("set_custom_discount:"):
+            if not is_admin(user.id):
+                await query.answer("⛔ غير مصرح لك!", show_alert=True)
+                return
+
+            product_id = int(data.split(":")[1])
+            context.user_data['setting_discount'] = {'product_id': product_id}
+            await query.edit_message_text(
+                "🔧 أرسل نسبة الخصم (0-100) لهذا المنتج:",
+                reply_markup=kb.back_button(f"product:{product_id}")
+            )
         
         # رصيدي
         elif data == "my_balance":
@@ -618,6 +723,35 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             amount = int(data.split(":")[1])
             await DonationSystem.handle_donation_amount(update, context, amount)
         
+        # حملة تبرع: تبرع سريع بالمبلغ المحدد ضمن الحملة
+        elif data.startswith("donate_campaign:"):
+            parts = data.split(":")
+            if len(parts) >= 3:
+                donation_url = parts[1]
+                amount = int(parts[2])
+                donation = db.get_donation_by_url(donation_url)
+                if not donation:
+                    await query.answer("❌ حملة التبرع غير موجودة!", show_alert=True)
+                    return
+
+                # set context to contribute to this donation and create invoice
+                context.user_data['donation_contribute'] = donation['id']
+                await DonationSystem.handle_donation_amount(update, context, amount)
+
+        elif data.startswith("donate_campaign_custom:"):
+            donation_url = data.split(":")[1]
+            donation = db.get_donation_by_url(donation_url)
+            if not donation:
+                await query.answer("❌ حملة التبرع غير موجودة!", show_alert=True)
+                return
+
+            context.user_data['donation_contribute'] = donation['id']
+            context.user_data['donation_custom_amount'] = True
+            await query.edit_message_text(
+                "💬 أرسل المبلغ الذي تريد التبرع به (نجوم):",
+                reply_markup=kb.back_button("start")
+            )
+        
         elif data == "donate_custom":
             context.user_data['donation_custom_amount'] = True
             await query.edit_message_text(
@@ -670,6 +804,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         elif data == "points_history":
             await points_history_handler(query, context, user.id)
+        
+        elif data == "top_campaigns":
+            await top_campaigns_handler(query, context)
+        
+        elif data.startswith("campaign_stats:"):
+            donation_id = int(data.split(":")[1])
+            await campaign_stats_handler(query, context, donation_id)
         
         else:
             await query.answer("⚠️ وظيفة قيد التطوير")
@@ -824,6 +965,148 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         await handle_edit_product_step(update, context)
         return
+
+    # معالجة تغيير فئة المنتج (من قبل المسؤول)
+    if 'changing_category' in context.user_data:
+        if not is_admin(user.id):
+            return
+
+        try:
+            product_id = context.user_data['changing_category']['product_id']
+            new_category = update.message.text.strip()
+
+            if db.update_product(product_id, category=new_category):
+                await update.message.reply_text(f"✅ تم تغيير فئة المنتج إلى: {new_category}")
+                db.add_log('admin', user.id, 'change_category', f'منتج: {product_id}, فئة: {new_category}')
+            else:
+                await update.message.reply_text("❌ فشل تغيير الفئة!")
+
+        except Exception as e:
+            logger.error(f"خطأ في تغيير الفئة: {e}")
+            await update.message.reply_text("❌ حدث خطأ أثناء تغيير الفئة")
+
+        del context.user_data['changing_category']
+        return
+
+    # معالجة تعيين خصم مخصص
+    if 'setting_discount' in context.user_data:
+        if not is_admin(user.id):
+            return
+
+        try:
+            product_id = context.user_data['setting_discount']['product_id']
+            percent = int(text.strip())
+            if percent < 0 or percent > 100:
+                await update.message.reply_text("❌ النسبة يجب أن تكون بين 0 و 100")
+                return
+
+            if db.update_product(product_id, discount_percentage=percent):
+                await update.message.reply_text(f"✅ تم تعيين خصم {percent}% للمنتج")
+                db.add_log('admin', user.id, 'set_custom_discount', f'منتج: {product_id}, نسبة: {percent}')
+            else:
+                await update.message.reply_text("❌ فشل تطبيق الخصم!")
+
+        except ValueError:
+            await update.message.reply_text("❌ الرجاء إدخال رقم صحيح للخصم")
+        except Exception as e:
+            logger.error(f"خطأ في تطبيق خصم مخصص: {e}")
+            await update.message.reply_text("❌ حدث خطأ أثناء تطبيق الخصم")
+
+        del context.user_data['setting_discount']
+        return
+
+    # معالجة استيراد CSV
+    if 'importing_products' in context.user_data:
+        if not is_admin(user.id):
+            return
+
+        # يجب أن يرسل المدير ملف وثيقة CSV
+        doc = update.message.document if update.message and hasattr(update.message, 'document') else None
+        if not doc:
+            await update.message.reply_text("❌ الرجاء إرسال ملف CSV كمستند.")
+            return
+
+        try:
+            file = await context.bot.get_file(doc.file_id)
+            os.makedirs('imports', exist_ok=True)
+            local_path = f"imports/products_{int(time.time())}.csv"
+            await file.download_to_drive(local_path)
+
+            added = 0
+            updated = 0
+            failed = 0
+
+            with open(local_path, newline='', encoding='utf-8') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    try:
+                        pid = row.get('id') or ''
+                        name = row.get('name') or ''
+                        description = row.get('description') or ''
+                        price = int(row.get('price') or 0)
+                        ptype = row.get('type') or 'text'
+                        content = row.get('content') or None
+                        stock = int(row.get('stock') or -1)
+                        is_limited = int(row.get('is_limited') or (1 if stock >= 0 else 0))
+                        category = row.get('category') or 'general'
+                        # If category matches a PRODUCT_TYPES key, use its label
+                        if category in config.PRODUCT_TYPES:
+                            category = config.PRODUCT_TYPES[category]
+
+                        if pid:
+                            # محاولة التحديث
+                            if db.update_product(int(pid), name=name, description=description, price=price,
+                                                 type=ptype, delivery_content=content, stock=stock,
+                                                 is_limited=is_limited, category=category):
+                                updated += 1
+                            else:
+                                failed += 1
+                        else:
+                            new_id = db.add_product(name, description, price, ptype, content, stock, is_limited, category)
+                            if new_id:
+                                added += 1
+                            else:
+                                failed += 1
+                    except Exception:
+                        failed += 1
+
+            await update.message.reply_text(f"✅ استيراد مكتمل — أضيف: {added}, تم تحديث: {updated}, فشل: {failed}")
+            db.add_log('admin', user.id, 'import_products_csv', f'added={added},updated={updated},failed={failed}')
+        except Exception as e:
+            logger.error(f"خطأ في استيراد CSV: {e}")
+            await update.message.reply_text("❌ فشل في معالجة ملف CSV")
+
+        del context.user_data['importing_products']
+        return
+
+    # معالجة تعيين خصم للجميع
+    if 'bulk_discount' in context.user_data:
+        if not is_admin(user.id):
+            return
+
+        try:
+            percent = int(text.strip())
+            if percent < 0 or percent > 100:
+                await update.message.reply_text("❌ النسبة يجب أن تكون بين 0 و 100")
+                return
+
+            products = db.get_active_products()
+            count = 0
+            for p in products:
+                if db.update_product(p['id'], discount_percentage=percent):
+                    count += 1
+
+            await update.message.reply_text(f"✅ تم تطبيق خصم {percent}% على {count} منتج(ـًا)")
+            db.add_log('admin', user.id, 'bulk_discount', f'percent={percent}, applied={count}')
+
+        except ValueError:
+            await update.message.reply_text("❌ الرجاء إدخال رقم صحيح للخصم")
+        except Exception as e:
+            logger.error(f"خطأ في تعيين خصم للجميع: {e}")
+            await update.message.reply_text("❌ حدث خطأ أثناء تطبيق الخصم الجماعي")
+
+        del context.user_data['bulk_discount']
+        return
     
     # معالجة البث الجماعي
     if 'broadcasting' in context.user_data:
@@ -836,7 +1119,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # معالجة التبرع
     if 'donation_step' in context.user_data:
         donation_step = context.user_data.get('donation_step')
-        
         if donation_step == 'amount':
             try:
                 amount = int(text)
@@ -845,10 +1127,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "❌ يجب أن يكون المبلغ 10 نجوم على الأقل!"
                     )
                     return
-                
+
                 context.user_data['donation_amount'] = amount
                 context.user_data['donation_step'] = 'description'
-                
+
                 await update.message.reply_text(
                     f"✅ المبلغ: {amount}⭐\n\n"
                     "📝 اكتب وصف للحملة (أو اكتب 'لا' للتخطي):"
@@ -856,32 +1138,67 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except ValueError:
                 await update.message.reply_text("❌ أدخل رقماً صحيحاً!")
             return
-        
+
         elif donation_step == 'description':
+            # احفظ الوصف ثم اطلب خيارات التبرع (إن وُجدت)
             description = text if text != 'لا' else None
-            
-            # إنشاء حملة تبرع
+            context.user_data['donation_description'] = description
+            context.user_data['donation_step'] = 'options'
+
+            await update.message.reply_text(
+                "🔧 هل تريد إضافة خيارات تبرع مسبقة؟\n"
+                "أرسل القيم مفصولة بفواصل مثل: 5,10,20 أو اكتب 'لا' للتخطي",
+                reply_markup=kb.back_button('donation_menu')
+            )
+            return
+
+        elif donation_step == 'options':
+            # قراءة الخيارات المرسلة من المستخدم (قائمة أعداد صحيحة مفصولة بفواصل)
+            options_text = text.strip()
+            options = None
+            if options_text != 'لا':
+                try:
+                    parts = [p.strip() for p in options_text.split(',') if p.strip()]
+                    opts = [int(p) for p in parts]
+                    # تحقق من صحة القيم
+                    if not opts or len(opts) > 10:
+                        await update.message.reply_text("❌ الرجاء إرسال قائمة خيارات صحيحة (حد أقصى 10 عناصر).")
+                        return
+                    for v in opts:
+                        if v < config.MIN_DONATION_AMOUNT or v > config.MAX_DONATION_AMOUNT:
+                            await update.message.reply_text(f"❌ كل خيار يجب أن يكون بين {config.MIN_DONATION_AMOUNT} و {config.MAX_DONATION_AMOUNT} نجمة.")
+                            return
+                    options = opts
+                except ValueError:
+                    await update.message.reply_text("❌ الرجاء إرسال أرقام مفصولة بفواصل فقط!")
+                    return
+
+            # إنشاء الحملة مع الخيارات إن وُجدت
             donation_id = db.create_donation(
                 donor_id=user.id,
-                amount=context.user_data['donation_amount'],
-                description=description
+                amount=context.user_data.get('donation_amount'),
+                description=context.user_data.get('donation_description'),
+                options=options
             )
-            
+
             if donation_id:
-                donation = db.get_donation(donation_id)
-                
+                donation_obj = db.get_donation(donation_id)
+
                 await update.message.reply_text(
                     f"✅ تم إنشاء حملة التبرع!\n\n"
-                    f"🎁 {description or 'تبرع'}\n"
-                    f"⭐ الهدف: {donation['amount']} نجمة\n"
+                    f"🎁 {donation_obj.get('description') or 'تبرع'}\n"
+                    f"⭐ الهدف: {donation_obj['amount']} نجمة\n"
                     f"🔗 الرابط للمشاركة:\n"
-                    f"<code>donate:{donation['donation_url']}</code>\n\n"
+                    f"<code>donate:{donation_obj['donation_url']}</code>\n\n"
                     f"شارك الرابط مع أصدقائك!",
                     parse_mode='HTML'
                 )
-                
-                del context.user_data['donation_step']
-                del context.user_data['donation_amount']
+                db.add_log('donation', user.id, 'donation_created', f'id={donation_id}, options={options}')
+
+                # تنظيف الحالة
+                for k in ['donation_step', 'donation_amount', 'donation_description']:
+                    if k in context.user_data:
+                        del context.user_data[k]
             else:
                 await update.message.reply_text("❌ فشل إنشاء الحملة!")
             return
@@ -1179,22 +1496,29 @@ async def buy_product_handler(query, context, product_id: int, user_id: int):
     payload = f"product_{product_id}_{user_id}_{int(datetime.now().timestamp())}"
     
     prices = [LabeledPrice(label=title, amount=final_price)]
-    
+
     try:
-        # إرسال الفاتورة
-        await query.message.reply_invoice(
-            title=title,
-            description=description,
-            payload=payload,
-            provider_token="",  # فارغ لـ Telegram Stars
-            currency="XTR",  # عملة Telegram Stars
-            prices=prices
-        )
-        
-        await query.answer("💳 تم إنشاء الفاتورة! أكمل الدفع 👆")
-        
-        db.add_log('purchase', user_id, 'invoice_created', f'منتج: {product_id}')
-    
+        # إرسال الفاتورة إن كان موفر الدفع مكوّن
+        if config.PAYMENT_PROVIDER_TOKEN:
+            await query.message.reply_invoice(
+                title=title,
+                description=description,
+                payload=payload,
+                provider_token=config.PAYMENT_PROVIDER_TOKEN,
+                currency="XTR",
+                prices=prices
+            )
+
+            await query.answer("💳 تم إنشاء الفاتورة! أكمل الدفع 👆")
+            db.add_log('purchase', user_id, 'invoice_created', f'منتج: {product_id}')
+        else:
+            # إذا لم يتم تكوين موفر الدفع، أعلم المستخدم بدل إنشاء فاتورة
+            await query.edit_message_text(
+                "💳 الدفع غير مفعّل حالياً.\n\n" \
+                f"تواصل مع الدعم: {config.SUPPORT_USERNAME}",
+                reply_markup=kb.back_button("start")
+            )
+
     except TelegramError as e:
         logger.error(f"خطأ في إنشاء الفاتورة: {e}")
         await query.answer("❌ فشل إنشاء الفاتورة!", show_alert=True)
@@ -1435,14 +1759,17 @@ async def my_donations_handler(query, context, user_id: int):
     donations_text = "🎁 <b>حملاتي</b>\n\n"
     
     for donation in donations:
-        progress = (donation['total_received'] / donation['amount']) * 100
+        progress = (donation['total_received'] / donation['amount']) * 100 if donation['amount'] > 0 else 0
+        remaining = max(0, donation['amount'] - donation['total_received'])
         status = "✅ مكتملة" if progress >= 100 else f"⏳ {progress:.0f}%"
         
         donations_text += (
             f"#{donation['id']} - {donation['description'] or 'تبرع'}\n"
             f"   الهدف: {donation['amount']}⭐\n"
             f"   المستقبل: {donation['total_received']}⭐\n"
-            f"   الحالة: {status}\n\n"
+            f"   المتبقي: {remaining}⭐\n"
+            f"   الحالة: {status}\n"
+            f"   الرابط: <code>donate:{donation['donation_url']}</code>\n\n"
         )
     
     await query.edit_message_text(
@@ -1522,6 +1849,75 @@ async def points_history_handler(query, context, user_id: int):
         parse_mode='HTML'
     )
 
+
+async def campaign_stats_handler(query, context, donation_id: int):
+    """عرض إحصائيات حملة تبرع محددة"""
+    try:
+        stats = db.get_campaign_stats(donation_id)
+        
+        if not stats:
+            await query.answer("❌ الحملة غير موجودة", show_alert=True)
+            return
+        
+        # رسم شريط التقدم البسيط
+        bar_length = 20
+        filled = int(bar_length * stats['percentage'] / 100)
+        bar = "█" * filled + "░" * (bar_length - filled)
+        
+        stats_text = (
+            f"🎁 <b>إحصائيات الحملة</b>\n\n"
+            f"الوصف: {stats['description'] or 'تبرع'}\n"
+            f"الهدف: {stats['goal']} ⭐\n"
+            f"المستقبل: {stats['received']} ⭐\n"
+            f"المتبقي: {stats['remaining']} ⭐\n\n"
+            f"التقدم: {stats['percentage']}% [{bar}]\n"
+            f"الحالة: {stats['status']}\n\n"
+            f"👥 عدد المساهمين: {stats['contributors']}\n"
+            f"📊 متوسط المساهمة: {stats['average_contribution']} ⭐\n"
+            f"🏆 أكبر مساهمة: {stats['max_contribution']} ⭐"
+        )
+        
+        await query.edit_message_text(
+            stats_text,
+            reply_markup=kb.back_button("donation_menu"),
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        logger.error(f"خطأ في عرض إحصائيات الحملة: {e}")
+        await query.answer("❌ حدث خطأ", show_alert=True)
+
+
+async def top_campaigns_handler(query, context):
+    """عرض أفضل حملات التبرع"""
+    try:
+        campaigns = db.get_top_campaigns(10)
+        
+        if not campaigns:
+            await query.edit_message_text(
+                "📊 <b>أفضل الحملات</b>\n\n"
+                "لا توجد حملات بعد",
+                reply_markup=kb.back_button("start"),
+                parse_mode='HTML'
+            )
+            return
+        
+        campaigns_text = "🏆 <b>أفضل حملات التبرع</b>\n\n"
+        
+        for i, campaign in enumerate(campaigns, 1):
+            percentage = int((campaign['total_received'] / campaign['amount'] * 100)) if campaign['amount'] > 0 else 0
+            campaigns_text += (
+                f"{i}. {campaign['description'] or 'تبرع'}\n"
+                f"   💰 {campaign['total_received']}/{campaign['amount']} ⭐ ({percentage}%)\n\n"
+            )
+        
+        await query.edit_message_text(
+            campaigns_text,
+            reply_markup=kb.back_button("start"),
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        logger.error(f"خطأ في عرض أفضل الحملات: {e}")
+        await query.answer("❌ حدث خطأ", show_alert=True)
 
 # استيراد asyncio
 import asyncio

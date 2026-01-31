@@ -33,10 +33,20 @@ async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         payload_type = parts[0]
         
-        # معالجة التبرع
+        # معالجة التبرع (بما في ذلك حملات)
         if payload_type == "donation":
-            user_id = int(parts[1])
-            
+            # campaign payload format: donation_c_{donation_id}_{user_id}_{uuid}
+            try:
+                if parts[1] == 'c':
+                    donation_id = int(parts[2])
+                    user_id = int(parts[3])
+                else:
+                    user_id = int(parts[1])
+                    donation_id = None
+            except Exception:
+                await query.answer(ok=False, error_message="❌ فاتورة تبرع غير صالحة!")
+                return
+
             # التحقق من صحة المستخدم
             if query.from_user.id != user_id:
                 await query.answer(ok=False, error_message="❌ المستخدم غير مطابق!")
@@ -47,7 +57,7 @@ async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             # كل شيء على ما يرام، قبول الدفع
             await query.answer(ok=True)
             db.add_log('payment', user_id, 'donation_precheckout_approved', 
-                      f'سعر: {query.total_amount}')
+                      f'سعر: {query.total_amount}, donation_id: {donation_id}')
             return
         
         # معالجة المنتج
@@ -127,9 +137,49 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
         
         # معالجة التبرع
         if payload_type == "donation":
-            from donation_system import DonationSystem
-            await DonationSystem.handle_donation_payment_success(update, context)
-            return
+            # handle campaign donations vs bot donations
+            try:
+                if parts[1] == 'c':
+                    donation_id = int(parts[2])
+                    user_id = int(parts[3])
+                else:
+                    donation_id = None
+                    user_id = int(parts[1])
+            except Exception:
+                await message.reply_text("❌ فاتورة تبرع غير صالحة!")
+                return
+
+            # amount detection
+            total = getattr(payment, 'total_amount', 0)
+            if isinstance(total, int) and total % 100 == 0 and (total // 100) <= config.MAX_DONATION_AMOUNT:
+                amount = total // 100
+            else:
+                amount = int(total)
+
+            if donation_id:
+                # add contribution to campaign
+                if db.add_donation_contribution(donation_id, user_id, amount):
+                    await message.reply_text(f"🎉 شكراً لتبرعك بـ {amount}⭐ للحملة!")
+                    donation = db.get_donation(donation_id)
+                    try:
+                        await context.bot.send_message(
+                            chat_id=donation['donor_id'],
+                            text=(f"🎉 تبرع جديد لحملتك #{donation_id}!\n" \
+                                  f"👤 {message.from_user.first_name}\n" \
+                                  f"💰 {amount}⭐")
+                        )
+                    except:
+                        pass
+                    db.add_log('donation', user_id, 'donation_campaign_successful', f'حملة: {donation_id}, مبلغ: {amount}')
+                    return
+                else:
+                    await message.reply_text("❌ فشل إضافة المساهمة للحملة!")
+                    return
+            else:
+                # bot donation
+                from donation_system import DonationSystem
+                await DonationSystem.handle_donation_payment_success(update, context)
+                return
         
         # معالجة المنتج
         if payload_type != "product" or len(parts) < 3:
@@ -349,5 +399,31 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
 
 async def refund_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج استرداد المبالغ (إن وجد)"""
-    # يمكن إضافة منطق استرداد المبالغ هنا إذا لزم الأمر
-    pass
+    try:
+        message = update.message
+        admin = message.from_user
+
+        # تسجيل الحدث في السجل
+        db.add_log('admin', admin.id, 'refund_requested', f'payload: {getattr(message, "text", "")[:200]}')
+
+        # إخطار المسؤولين بأن هناك طلب استرداد (يحتاج تنفيذ خارجي)
+        notify_text = (
+            "🔔 تم استلام طلب استرداد.\n\n"
+            f"من: {admin.first_name} (@{admin.username or 'بدون'})\n"
+            f"محتوى: {getattr(message, 'text', '')}\n\n"
+            "⚠️ ملاحظة: هذه الوظيفة مجرد إشعار. يجب تنفيذ الاسترداد يدوياً من قبل الإدارة."
+        )
+
+        for admin_id in config.ADMIN_IDS:
+            try:
+                await context.bot.send_message(chat_id=admin_id, text=notify_text)
+            except Exception:
+                logger.exception(f"فشل إخطار المشرف {admin_id} بطلب الاسترداد")
+
+        await message.reply_text("✅ تم استلام طلب الاسترداد. سيقوم الدعم بمراجعته.")
+    except Exception as e:
+        logger.error(f"خطأ في refund_handler: {e}")
+        try:
+            await update.message.reply_text("❌ حدث خطأ في معالجة طلب الاسترداد.")
+        except:
+            pass

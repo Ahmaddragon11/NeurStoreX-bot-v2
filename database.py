@@ -1243,20 +1243,30 @@ class Database:
     # ==================== دوال التبرعات ====================
     
     def create_donation(self, donor_id: int, amount: int, 
-                       description: str = None) -> Optional[int]:
+                       description: str = None, options: list = None) -> Optional[int]:
         """إنشاء حملة تبرع جديدة"""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
             
-            import uuid
+            import uuid, json
             donation_url = f"donate_{uuid.uuid4().hex[:10]}"
-            
+
+            # Ensure donations table has donation_options column
+            try:
+                cursor.execute("SELECT donation_options FROM donations LIMIT 1")
+            except Exception:
+                try:
+                    cursor.execute("ALTER TABLE donations ADD COLUMN donation_options TEXT DEFAULT NULL")
+                    conn.commit()
+                except Exception:
+                    pass
+
             cursor.execute("""
                 INSERT INTO donations 
-                (donor_id, amount, donation_url, description)
-                VALUES (?, ?, ?, ?)
-            """, (donor_id, amount, donation_url, description))
+                (donor_id, amount, donation_url, description, donation_options)
+                VALUES (?, ?, ?, ?, ?)
+            """, (donor_id, amount, donation_url, description, json.dumps(options) if options else None))
             
             conn.commit()
             donation_id = cursor.lastrowid
@@ -1543,6 +1553,75 @@ class Database:
             return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"خطأ في جلب التبرعات: {e}")
+            return []
+    
+    def get_campaign_stats(self, donation_id: int) -> Dict:
+        """جلب إحصائيات حملة تبرع محددة"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            donation = self.get_donation(donation_id)
+            if not donation:
+                return {}
+            
+            # عدد المساهمين الفريدين
+            cursor.execute("""
+                SELECT COUNT(DISTINCT contributor_id) as count
+                FROM donation_records WHERE donation_id = ?
+            """, (donation_id,))
+            contributors = cursor.fetchone()['count'] or 0
+            
+            # متوسط المساهمة
+            cursor.execute("""
+                SELECT AVG(amount) as avg FROM donation_records WHERE donation_id = ?
+            """, (donation_id,))
+            avg_contribution = int(cursor.fetchone()['avg'] or 0)
+            
+            # أكبر مساهمة
+            cursor.execute("""
+                SELECT MAX(amount) as max FROM donation_records WHERE donation_id = ?
+            """, (donation_id,))
+            max_contribution = cursor.fetchone()['max'] or 0
+            
+            # النسبة المئوية للهدف
+            percentage = (donation['total_received'] / donation['amount'] * 100) if donation['amount'] > 0 else 0
+            
+            return {
+                'donation_id': donation_id,
+                'description': donation['description'],
+                'goal': donation['amount'],
+                'received': donation['total_received'],
+                'percentage': int(percentage),
+                'contributors': contributors,
+                'average_contribution': avg_contribution,
+                'max_contribution': max_contribution,
+                'remaining': max(0, donation['amount'] - donation['total_received']),
+                'status': 'مكتملة' if percentage >= 100 else 'جارية'
+            }
+        except Exception as e:
+            logger.error(f"خطأ في جلب إحصائيات الحملة: {e}")
+            return {}
+    
+    def get_top_campaigns(self, limit: int = 10) -> List[Dict]:
+        """جلب أفضل حملات التبرع"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT id, description, amount, total_received,
+                       (CAST(total_received AS FLOAT) / amount * 100) as percentage,
+                       donor_id, created_at
+                FROM donations
+                WHERE status = 'active'
+                ORDER BY total_received DESC
+                LIMIT ?
+            """, (limit,))
+            
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"خطأ في جلب أفضل الحملات: {e}")
             return []
 
     def close(self):
